@@ -7,6 +7,9 @@ const store = require('./lib/store');
 const { formatEmailMessage, formatDigest, formatStats, esc } = require('./lib/formatter');
 const { sendReply } = require('./lib/smtp');
 const { createWebPanel } = require('./lib/web');
+const { calculateSpamScore, recordSpam, getSpamStats, addSpamWord, removeSpamWord, getSpamWords, addSpamSender, removeSpamSender, getSpamSenders } = require('./lib/spam');
+const { recordAnalytics, getPeakHours, getPeakDays, getTopSenders, getCategoryBreakdown, getDailyTrend } = require('./lib/analytics');
+const { categorize } = require('./lib/categories');
 
 // ─── Config ───────────────────────────────────────────────────────
 const {
@@ -49,6 +52,7 @@ function isQuietHours() {
 async function sendToTelegram(parsed, accountLabel) {
     const fromEmail = parsed.from?.value?.[0]?.address || 'невідомо';
     const subject = parsed.subject || '(без теми)';
+    const body = parsed.text || '';
 
     // Check filters
     if (store.isFiltered(subject, fromEmail)) {
@@ -56,8 +60,35 @@ async function sendToTelegram(parsed, accountLabel) {
         return;
     }
 
-    // Record stats
+    // Spam detection
+    const spamResult = calculateSpamScore(subject, fromEmail, body, parsed.attachments);
+    if (spamResult.isSpam) {
+        recordSpam(fromEmail, subject);
+        const reasons = spamResult.reasons.join(', ');
+        log(`🛡️ СПАМ (${spamResult.score}): "${subject}" від ${fromEmail} [${reasons}]`);
+        await bot.sendMessage(chatId, [
+            `🛡️ <b>Спам заблоковано</b>`,
+            ``,
+            `📧 <code>${esc(fromEmail)}</code>`,
+            `📋 ${esc(subject)}`,
+            `⚠️ Причини: ${esc(reasons)}`,
+            `🎯 Рейтинг: ${spamResult.score}/5`,
+        ].join('\n'), {
+            parse_mode: 'HTML',
+            reply_markup: {
+                inline_keyboard: [[
+                    { text: '✅ Не спам', callback_data: `notspam_${Date.now()}` },
+                    { text: '🚫 Блокувати відправника', callback_data: `blocksender_${fromEmail}` },
+                ]],
+            },
+        });
+        return;
+    }
+
+    // Record stats & analytics
     store.recordEmail(fromEmail, subject);
+    const category = categorize(subject, fromEmail, body);
+    recordAnalytics(fromEmail, subject, category.name, parsed.date || new Date());
 
     // Check mute / quiet hours
     if (store.isMuted() || isQuietHours()) {
@@ -68,11 +99,12 @@ async function sendToTelegram(parsed, accountLabel) {
 
     const message = formatEmailMessage(parsed, accountLabel);
 
-    // Create inline keyboard with Reply button
+    const cbReply = `reply_${Date.now()}`;
     const keyboard = {
         reply_markup: {
             inline_keyboard: [[
-                { text: '✉️ Відповісти', callback_data: `reply_${Date.now()}` },
+                { text: '✉️ Відповісти', callback_data: cbReply },
+                { text: '🛡️ Спам', callback_data: `markspam_${fromEmail}_${Date.now()}` },
             ]],
         },
         parse_mode: 'HTML',
@@ -85,19 +117,7 @@ async function sendToTelegram(parsed, accountLabel) {
         ? store.getAccounts().find(a => a.user === accountLabel) || { user: EMAIL_USER, password: EMAIL_PASSWORD }
         : { user: EMAIL_USER, password: EMAIL_PASSWORD };
 
-    pendingReplies.set(`reply_${sent.message_id}`, {
-        to: fromEmail,
-        subject: subject,
-        account: account,
-    });
-
-    // Also store by callback data
-    const cbKey = `reply_${Date.now()}`;
-    pendingReplies.set(cbKey, {
-        to: fromEmail,
-        subject: subject,
-        account: account,
-    });
+    pendingReplies.set(cbReply, { to: fromEmail, subject, account });
 
     log(`✅ "${subject}" від ${fromEmail}`);
 
@@ -119,59 +139,81 @@ async function sendToTelegram(parsed, accountLabel) {
 
 // ─── Callback: Reply button ──────────────────────────────────────
 bot.on('callback_query', async (query) => {
-    if (!query.data.startsWith('reply_')) return;
+    const data = query.data;
 
-    // Find reply info from the message
-    const replyInfo = Array.from(pendingReplies.values()).find(r =>
-        r.to && r.subject
-    );
+    // Reply button
+    if (data.startsWith('reply_')) {
+        const replyInfo = pendingReplies.get(data);
+        if (!replyInfo) {
+            await bot.answerCallbackQuery(query.id, { text: '⏰ Дані застаріли' });
+            return;
+        }
+        await bot.answerCallbackQuery(query.id);
+        await bot.sendMessage(chatId, [
+            `✉️ <b>Відповідь на лист:</b>`,
+            `📧 <b>Кому:</b> <code>${esc(replyInfo.to)}</code>`,
+            `📋 <b>Тема:</b> Re: ${esc(replyInfo.subject)}`,
+            ``, `Напишіть текст відповіді:`,
+        ].join('\n'), { parse_mode: 'HTML', reply_markup: { force_reply: true } });
 
-    if (!replyInfo) {
-        await bot.answerCallbackQuery(query.id, { text: '⏰ Дані для відповіді застаріли' });
-        return;
+        bot.once('message', async (msg) => {
+            if (String(msg.chat.id) !== String(chatId) || !msg.text || msg.text.startsWith('/')) return;
+            try {
+                await sendReply(replyInfo.account, replyInfo.to, replyInfo.subject, msg.text);
+                await bot.sendMessage(chatId, `✅ Відправлено на <code>${esc(replyInfo.to)}</code>`, { parse_mode: 'HTML' });
+            } catch (err) {
+                await bot.sendMessage(chatId, `❌ SMTP: <code>${esc(err.message)}</code>`, { parse_mode: 'HTML' });
+            }
+        });
     }
 
-    await bot.answerCallbackQuery(query.id);
-    await bot.sendMessage(chatId, [
-        `✉️ <b>Відповідь на лист:</b>`,
-        `📧 <b>Кому:</b> <code>${esc(replyInfo.to)}</code>`,
-        `📋 <b>Тема:</b> Re: ${esc(replyInfo.subject)}`,
-        ``,
-        `Напишіть текст відповіді:`,
-    ].join('\n'), { parse_mode: 'HTML', reply_markup: { force_reply: true } });
+    // Mark as spam
+    if (data.startsWith('markspam_')) {
+        const sender = data.split('_')[1];
+        addSpamSender(sender);
+        await bot.answerCallbackQuery(query.id, { text: '🛡️ Відправника заблоковано' });
+        await bot.sendMessage(chatId, `🛡️ <code>${esc(sender)}</code> додано до спам-списку`, { parse_mode: 'HTML' });
+        log(`🛡️ Spam sender: ${sender}`);
+    }
 
-    // Listen for reply
-    bot.once('message', async (msg) => {
-        if (String(msg.chat.id) !== String(chatId)) return;
-        if (!msg.text || msg.text.startsWith('/')) return;
+    // Not spam
+    if (data.startsWith('notspam_')) {
+        await bot.answerCallbackQuery(query.id, { text: '✅ Позначено як не спам' });
+    }
 
-        try {
-            await sendReply(replyInfo.account, replyInfo.to, replyInfo.subject, msg.text);
-            await bot.sendMessage(chatId, `✅ Відповідь відправлено на <code>${esc(replyInfo.to)}</code>`, { parse_mode: 'HTML' });
-            log(`✉️ Відповідь → ${replyInfo.to}`);
-        } catch (err) {
-            await bot.sendMessage(chatId, `❌ Помилка: <code>${esc(err.message)}</code>`, { parse_mode: 'HTML' });
-            log(`❌ SMTP: ${err.message}`);
-        }
-    });
+    // Block sender
+    if (data.startsWith('blocksender_')) {
+        const sender = data.replace('blocksender_', '');
+        addSpamSender(sender);
+        await bot.answerCallbackQuery(query.id, { text: '🚫 Відправника заблоковано' });
+        await bot.sendMessage(chatId, `🚫 <code>${esc(sender)}</code> заблоковано`, { parse_mode: 'HTML' });
+    }
+
+    // IMAP host selection for addmail
+    if (data.startsWith('imaphost_')) {
+        const host = data.replace('imaphost_', '');
+        await bot.answerCallbackQuery(query.id);
+        finishAddMail(query.message.chat.id, host);
+    }
 });
 
 // ─── Bot Commands ────────────────────────────────────────────────
 bot.onText(/\/start/, (msg) => {
     if (String(msg.chat.id) !== String(chatId)) return;
     bot.sendMessage(msg.chat.id, [
-        `🤖 <b>Email → Telegram Bot v3</b>`,
+        `🤖 <b>Email → Telegram Bot v4</b>`,
         ``,
         `📋 <b>Команди:</b>`,
         `/status — стан бота`,
         `/stats — статистика листів`,
+        `/analytics — аналітика (піки, тренди)`,
         `/digest — дайджест за сьогодні`,
         `/search &lt;слово&gt; — пошук листів`,
         `/filter — керування фільтрами`,
-        `/mute — тихий режим`,
-        `/unmute — вимкнути тихий`,
+        `/spam — спам-фільтр`,
+        `/mute / /unmute — тихий режим`,
         `/accounts — підключені акаунти`,
-        `/addmail — додати акаунт`,
+        `/miniapp — 📱 Mini App`,
         `/help — довідка`,
     ].join('\n'), { parse_mode: 'HTML' });
 });
@@ -239,6 +281,101 @@ bot.onText(/\/digest/, (msg) => {
     const today = new Date().toISOString().slice(0, 10);
     const digest = store.getTodayDigest();
     bot.sendMessage(msg.chat.id, formatDigest(digest, today), { parse_mode: 'HTML' });
+});
+
+// ── Analytics
+bot.onText(/\/analytics/, (msg) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    const peaks = getPeakHours();
+    const days = getPeakDays();
+    const topS = getTopSenders(5);
+    const cats = getCategoryBreakdown();
+
+    const peakStr = peaks.map(p => `${p.hour}:00 (${p.count})`).join(', ');
+    const dayStr = days.slice(0, 3).map(d => `${d.day} (${d.count})`).join(', ');
+    const senderStr = topS.length > 0
+        ? topS.map((s, i) => `  ${['🥇', '🥈', '🥉', '4️⃣', '5️⃣'][i]} <code>${esc(s.email)}</code> — ${s.count}`).join('\n')
+        : '  —';
+    const catStr = cats.length > 0
+        ? cats.slice(0, 5).map(c => `  ${c.name} — ${c.count} (${c.pct}%)`).join('\n')
+        : '  —';
+
+    bot.sendMessage(msg.chat.id, [
+        `📈 <b>Аналітика</b>`,
+        `━━━━━━━━━━━━━━━━━━━━`,
+        ``,
+        `🕐 <b>Пік годин:</b> ${peakStr || '—'}`,
+        `📅 <b>Пік днів:</b> ${dayStr || '—'}`,
+        ``,
+        `👥 <b>Топ відправники:</b>`,
+        senderStr,
+        ``,
+        `🏷️ <b>Категорії:</b>`,
+        catStr,
+    ].join('\n'), { parse_mode: 'HTML' });
+});
+
+// ── Spam commands
+bot.onText(/\/spam(.*)/, (msg, match) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    const args = (match[1] || '').trim().split(' ');
+    const action = args[0];
+    const value = args.slice(1).join(' ');
+
+    if (action === 'add' && value) {
+        addSpamWord(value);
+        bot.sendMessage(msg.chat.id, `🛡️ Спам-слово додано: <b>${esc(value)}</b>`, { parse_mode: 'HTML' });
+    } else if (action === 'remove' && value) {
+        removeSpamWord(value);
+        bot.sendMessage(msg.chat.id, `🗑 Спам-слово видалено: <b>${esc(value)}</b>`, { parse_mode: 'HTML' });
+    } else if (action === 'block' && value) {
+        addSpamSender(value);
+        bot.sendMessage(msg.chat.id, `🚫 Відправника заблоковано: <code>${esc(value)}</code>`, { parse_mode: 'HTML' });
+    } else if (action === 'unblock' && value) {
+        removeSpamSender(value);
+        bot.sendMessage(msg.chat.id, `✅ Відправника розблоковано: <code>${esc(value)}</code>`, { parse_mode: 'HTML' });
+    } else if (action === 'list' || !action) {
+        const words = getSpamWords();
+        const senders = getSpamSenders();
+        const stats = getSpamStats();
+        bot.sendMessage(msg.chat.id, [
+            `🛡️ <b>Спам-фільтр</b>`,
+            `━━━━━━━━━━━━━━━━━━━━`,
+            ``,
+            `🚫 <b>Заблоковано:</b> ${stats.total} листів`,
+            ``,
+            `📝 <b>Спам-слова:</b> ${words.length > 0 ? words.join(', ') : 'немає'}`,
+            `🚫 <b>Заблоковані:</b> ${senders.length > 0 ? senders.map(s => `<code>${esc(s)}</code>`).join(', ') : 'немає'}`,
+            ``,
+            `/spam add &lt;слово&gt;`,
+            `/spam remove &lt;слово&gt;`,
+            `/spam block &lt;email&gt;`,
+            `/spam unblock &lt;email&gt;`,
+        ].join('\n'), { parse_mode: 'HTML' });
+    } else {
+        bot.sendMessage(msg.chat.id, [
+            '🛡️ <b>Спам-команди:</b>',
+            '/spam — список і статистика',
+            '/spam add &lt;слово&gt; — додати спам-слово',
+            '/spam remove &lt;слово&gt; — видалити',
+            '/spam block &lt;email&gt; — заблокувати відправника',
+            '/spam unblock &lt;email&gt; — розблокувати',
+        ].join('\n'), { parse_mode: 'HTML' });
+    }
+});
+
+// ── Mini App command
+bot.onText(/\/miniapp/, (msg) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+    bot.sendMessage(msg.chat.id, `📱 <b>Mini App:</b>`, {
+        parse_mode: 'HTML',
+        reply_markup: {
+            inline_keyboard: [[
+                { text: '📱 Відкрити Mini App', web_app: { url: `${url}/miniapp` } },
+            ]],
+        },
+    });
 });
 
 // ── Mute/Unmute
@@ -389,13 +526,7 @@ bot.on('message', async (msg) => {
     }
 });
 
-bot.on('callback_query', async (query) => {
-    if (query.data.startsWith('imaphost_')) {
-        const host = query.data.replace('imaphost_', '');
-        await bot.answerCallbackQuery(query.id);
-        finishAddMail(query.message.chat.id, host);
-    }
-});
+// imaphost callback is handled in the main callback_query handler above
 
 function finishAddMail(chatIdFrom, host) {
     const state = addMailState[chatIdFrom];

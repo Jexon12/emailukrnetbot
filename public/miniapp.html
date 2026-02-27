@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="uk">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>📧 Email Bot</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0f0f1a;
+            --card: linear-gradient(145deg, #1a1a2e, #16213e);
+            --border: #2a2a4a;
+            --accent: #667eea;
+            --accent2: #764ba2;
+            --text: #e0e0e0;
+            --muted: #888;
+            --green: #34d399;
+            --red: #f87171;
+            --yellow: #fbbf24;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: 16px;
+            padding-bottom: 80px;
+        }
+
+        h1 {
+            font-size: 22px;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-align: center;
+            margin-bottom: 4px;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: var(--muted);
+            font-size: 12px;
+            margin-bottom: 20px;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 20px;
+            background: rgba(26, 26, 46, 0.8);
+            border-radius: 12px;
+            padding: 4px;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 10px 8px;
+            text-align: center;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--muted);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .tab.active {
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            color: white;
+        }
+
+        /* Panels */
+        .panel {
+            display: none;
+        }
+
+        .panel.active {
+            display: block;
+        }
+
+        /* Cards */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .stat-label {
+            font-size: 11px;
+            color: var(--muted);
+            margin-top: 4px;
+        }
+
+        /* Section */
+        .section {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            color: #ccc;
+        }
+
+        /* Chart */
+        .chart {
+            display: flex;
+            align-items: flex-end;
+            gap: 6px;
+            height: 120px;
+            padding: 8px 0;
+        }
+
+        .chart-col {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .chart-bar {
+            width: 100%;
+            border-radius: 4px 4px 0 0;
+            background: linear-gradient(180deg, var(--accent), var(--accent2));
+            min-height: 2px;
+            transition: height 0.5s ease;
+        }
+
+        .chart-label {
+            font-size: 9px;
+            color: var(--muted);
+        }
+
+        .chart-val {
+            font-size: 10px;
+            color: #ccc;
+            font-weight: 600;
+        }
+
+        /* Hourly heatmap */
+        .heatmap {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 4px;
+        }
+
+        .heat-cell {
+            aspect-ratio: 1;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 9px;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.7);
+            transition: transform 0.2s;
+        }
+
+        .heat-cell:hover {
+            transform: scale(1.2);
+        }
+
+        /* List */
+        .list-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+
+        .list-item:last-child {
+            border-bottom: none;
+        }
+
+        .list-email {
+            color: var(--accent);
+            font-family: monospace;
+            font-size: 12px;
+        }
+
+        .list-count {
+            background: rgba(102, 126, 234, 0.15);
+            color: var(--accent);
+            padding: 2px 10px;
+            border-radius: 10px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* Category pills */
+        .cat-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .cat-bar-bg {
+            flex: 1;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .cat-bar-fill {
+            height: 100%;
+            border-radius: 4px;
+            background: linear-gradient(90deg, var(--accent), var(--accent2));
+            transition: width 0.5s ease;
+        }
+
+        .cat-name {
+            font-size: 12px;
+            min-width: 90px;
+        }
+
+        .cat-pct {
+            font-size: 12px;
+            color: var(--muted);
+            min-width: 35px;
+            text-align: right;
+        }
+
+        /* Spam section */
+        .spam-alert {
+            background: rgba(248, 113, 113, 0.1);
+            border: 1px solid rgba(248, 113, 113, 0.3);
+            border-radius: 10px;
+            padding: 12px;
+            margin-bottom: 12px;
+            font-size: 13px;
+        }
+
+        .spam-word {
+            display: inline-block;
+            background: rgba(248, 113, 113, 0.15);
+            color: var(--red);
+            padding: 4px 10px;
+            border-radius: 8px;
+            font-size: 12px;
+            margin: 3px;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--muted);
+        }
+
+        .spinner {
+            width: 30px;
+            height: 30px;
+            border: 3px solid var(--border);
+            border-top: 3px solid var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 12px;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* Weekday chart */
+        .weekday-chart {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+        }
+
+        .weekday-item {
+            text-align: center;
+            flex: 1;
+        }
+
+        .weekday-bar-wrap {
+            height: 80px;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+        }
+
+        .weekday-bar {
+            width: 24px;
+            border-radius: 6px 6px 0 0;
+            background: linear-gradient(180deg, var(--accent), var(--accent2));
+            min-height: 4px;
+            transition: height 0.5s;
+        }
+
+        .weekday-label {
+            font-size: 11px;
+            color: var(--muted);
+            margin-top: 6px;
+        }
+
+        .weekday-val {
+            font-size: 11px;
+            color: #ccc;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>📧 Email Bot</h1>
+    <p class="subtitle" id="email-label">Завантаження...</p>
+
+    <div class="tabs">
+        <div class="tab active" onclick="showPanel('overview')">📊 Огляд</div>
+        <div class="tab" onclick="showPanel('analytics')">📈 Аналітика</div>
+        <div class="tab" onclick="showPanel('spam')">🛡️ Спам</div>
+    </div>
+
+    <!-- OVERVIEW -->
+    <div class="panel active" id="panel-overview">
+        <div class="stats-grid" id="stats-cards"></div>
+        <div class="section">
+            <div class="section-title">📈 Листів за 14 днів</div>
+            <div class="chart" id="trend-chart"></div>
+        </div>
+        <div class="section">
+            <div class="section-title">👥 Топ відправники</div>
+            <div id="top-senders"></div>
+        </div>
+    </div>
+
+    <!-- ANALYTICS -->
+    <div class="panel" id="panel-analytics">
+        <div class="section">
+            <div class="section-title">🕐 Активність за годинами</div>
+            <div class="heatmap" id="hourly-heatmap"></div>
+        </div>
+        <div class="section">
+            <div class="section-title">📅 По днях тижня</div>
+            <div class="weekday-chart" id="weekday-chart"></div>
+        </div>
+        <div class="section">
+            <div class="section-title">🏷️ Категорії</div>
+            <div id="categories-breakdown"></div>
+        </div>
+    </div>
+
+    <!-- SPAM -->
+    <div class="panel" id="panel-spam">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="spam-blocked">0</div>
+                <div class="stat-label">🛡️ Заблоковано</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="spam-words-count">0</div>
+                <div class="stat-label">📝 Спам-слів</div>
+            </div>
+        </div>
+        <div class="section">
+            <div class="section-title">🚫 Заблоковані відправники</div>
+            <div id="blocked-senders"><span style="color:var(--muted);font-size:13px">Немає</span></div>
+        </div>
+        <div class="section">
+            <div class="section-title">📝 Спам-слова</div>
+            <div id="spam-words-list"><span style="color:var(--muted);font-size:13px">Немає</span></div>
+        </div>
+        <div class="section">
+            <div class="section-title">🕵️ Останні спам-листи</div>
+            <div id="recent-spam"><span style="color:var(--muted);font-size:13px">Немає</span></div>
+        </div>
+    </div>
+
+    <script>
+        const tg = window.Telegram?.WebApp;
+        if (tg) {
+            tg.ready();
+            tg.expand();
+        }
+
+        const BASE = window.location.origin;
+
+        function showPanel(name) {
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(`panel-${name}`).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        async function loadData() {
+            try {
+                const [statsRes, analyticsRes, spamRes] = await Promise.all([
+                    fetch(`${BASE}/api/stats`).then(r => r.json()),
+                    fetch(`${BASE}/api/analytics`).then(r => r.json()),
+                    fetch(`${BASE}/api/spam`).then(r => r.json()),
+                ]);
+
+                renderOverview(statsRes, analyticsRes);
+                renderAnalytics(analyticsRes);
+                renderSpam(spamRes);
+            } catch (e) {
+                console.error('Load error:', e);
+            }
+        }
+
+        function renderOverview(stats, analytics) {
+            document.getElementById('email-label').textContent = stats.email || '';
+
+            document.getElementById('stats-cards').innerHTML = `
+        <div class="stat-card"><div class="stat-value">${stats.today || 0}</div><div class="stat-label">📅 Сьогодні</div></div>
+        <div class="stat-card"><div class="stat-value">${stats.week || 0}</div><div class="stat-label">📆 Тиждень</div></div>
+        <div class="stat-card"><div class="stat-value">${stats.total || 0}</div><div class="stat-label">📈 Всього</div></div>
+        <div class="stat-card"><div class="stat-value">${stats.accounts || 1}</div><div class="stat-label">📧 Акаунтів</div></div>
+      `;
+
+            // Trend chart
+            const trend = analytics.trend || [];
+            const max = Math.max(...trend.map(t => t.count), 1);
+            document.getElementById('trend-chart').innerHTML = trend.map(t => `
+        <div class="chart-col">
+          <div class="chart-val">${t.count}</div>
+          <div class="chart-bar" style="height: ${Math.max((t.count / max) * 90, 2)}px"></div>
+          <div class="chart-label">${t.date}</div>
+        </div>
+      `).join('');
+
+            // Top senders
+            const senders = analytics.topSenders || [];
+            document.getElementById('top-senders').innerHTML = senders.length > 0
+                ? senders.map(s => `
+          <div class="list-item">
+            <span class="list-email">${s.email}</span>
+            <span class="list-count">${s.count}</span>
+          </div>
+        `).join('')
+                : '<span style="color:var(--muted);font-size:13px">Ще немає даних</span>';
+        }
+
+        function renderAnalytics(data) {
+            // Hourly heatmap
+            const hourly = data.hourly || new Array(24).fill(0);
+            const maxH = Math.max(...hourly, 1);
+            document.getElementById('hourly-heatmap').innerHTML = hourly.map((count, h) => {
+                const intensity = count / maxH;
+                const bg = intensity === 0
+                    ? 'rgba(255,255,255,0.03)'
+                    : `rgba(102,126,234,${0.15 + intensity * 0.85})`;
+                return `<div class="heat-cell" style="background:${bg}" title="${h}:00 — ${count} листів">${h}</div>`;
+            }).join('');
+
+            // Weekday chart
+            const weekday = data.weekday || new Array(7).fill(0);
+            const dayNames = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+            const maxW = Math.max(...weekday, 1);
+            document.getElementById('weekday-chart').innerHTML = weekday.map((count, i) => `
+        <div class="weekday-item">
+          <div class="weekday-val">${count}</div>
+          <div class="weekday-bar-wrap">
+            <div class="weekday-bar" style="height: ${Math.max((count / maxW) * 70, 4)}px"></div>
+          </div>
+          <div class="weekday-label">${dayNames[i]}</div>
+        </div>
+      `).join('');
+
+            // Categories
+            const cats = data.categories || [];
+            document.getElementById('categories-breakdown').innerHTML = cats.length > 0
+                ? cats.map(c => `
+          <div class="cat-row">
+            <span class="cat-name">${c.name}</span>
+            <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:${c.pct}%"></div></div>
+            <span class="cat-pct">${c.pct}%</span>
+          </div>
+        `).join('')
+                : '<span style="color:var(--muted);font-size:13px">Ще немає даних</span>';
+        }
+
+        function renderSpam(data) {
+            document.getElementById('spam-blocked').textContent = data.totalBlocked || 0;
+            document.getElementById('spam-words-count').textContent = (data.words || []).length;
+
+            // Blocked senders
+            const senders = data.senders || [];
+            document.getElementById('blocked-senders').innerHTML = senders.length > 0
+                ? senders.map(s => `<div class="list-item"><span class="list-email">${s}</span></div>`).join('')
+                : '<span style="color:var(--muted);font-size:13px">Немає</span>';
+
+            // Spam words
+            const words = data.words || [];
+            document.getElementById('spam-words-list').innerHTML = words.length > 0
+                ? words.map(w => `<span class="spam-word">${w}</span>`).join('')
+                : '<span style="color:var(--muted);font-size:13px">Додайте через /spam add &lt;слово&gt;</span>';
+
+            // Recent spam
+            const recent = data.recent || [];
+            document.getElementById('recent-spam').innerHTML = recent.length > 0
+                ? recent.slice(0, 5).map(r => `
+          <div class="list-item">
+            <div>
+              <div style="font-size:13px;font-weight:500">${r.subject || '?'}</div>
+              <div class="list-email">${r.from || '?'}</div>
+            </div>
+          </div>
+        `).join('')
+                : '<span style="color:var(--muted);font-size:13px">Немає</span>';
+        }
+
+        loadData();
+        setInterval(loadData, 30000);
+    </script>
+</body>
+
+</html>
