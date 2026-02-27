@@ -612,14 +612,15 @@ async function main() {
     console.log('║   Full-featured Email Bot                 ║');
     console.log('╚═══════════════════════════════════════════╝');
     console.log('');
+
+    // Start web panel FIRST so Render detects the port
+    const app = createWebPanel({ mainEmail: EMAIL_USER });
+    app.listen(parseInt(PORT), '0.0.0.0', () => {
+        log(`🌐 Веб-панель: http://0.0.0.0:${PORT}`);
+    });
+
     log(`📧 Main: ${EMAIL_USER}`);
     log(`💬 Chat: ${TELEGRAM_CHAT_ID}`);
-
-    // Start web panel
-    const app = createWebPanel({ mainEmail: EMAIL_USER });
-    app.listen(PORT, () => {
-        log(`🌐 Веб-панель: http://localhost:${PORT}`);
-    });
 
     // Notify on Telegram
     try {
