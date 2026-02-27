@@ -1,0 +1,16 @@
+{
+    "name": "email-telegram-bot",
+    "version": "2.0.0",
+    "description": "Telegram bot that forwards UKR.NET emails to Telegram (Vercel Serverless)",
+    "main": "bot.js",
+    "scripts": {
+        "start": "node bot.js",
+        "setup-webhook": "node setup-webhook.js"
+    },
+    "dependencies": {
+        "dotenv": "^16.4.7",
+        "imap": "^0.8.19",
+        "mailparser": "^3.7.2",
+        "node-telegram-bot-api": "^0.66.0"
+    }
+}
