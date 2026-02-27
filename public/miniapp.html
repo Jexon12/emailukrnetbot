@@ -9,16 +9,18 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #0f0f1a;
-            --card: linear-gradient(145deg, #1a1a2e, #16213e);
-            --border: #2a2a4a;
-            --accent: #667eea;
-            --accent2: #764ba2;
-            --text: #e0e0e0;
-            --muted: #888;
-            --green: #34d399;
-            --red: #f87171;
-            --yellow: #fbbf24;
+            --bg: #faf7f2;
+            --card-bg: #ffffff;
+            --border: #f0e6d8;
+            --accent: #f97316;
+            --accent2: #ea580c;
+            --accent-light: rgba(249, 115, 22, 0.08);
+            --accent-medium: rgba(249, 115, 22, 0.15);
+            --text: #1a1a1a;
+            --muted: #8a8178;
+            --green: #22c55e;
+            --red: #ef4444;
+            --yellow: #eab308;
         }
 
         * {
@@ -41,6 +43,7 @@
             font-weight: 800;
             background: linear-gradient(135deg, var(--accent), var(--accent2));
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
             text-align: center;
             margin-bottom: 4px;
@@ -53,12 +56,11 @@
             margin-bottom: 20px;
         }
 
-        /* Tabs */
         .tabs {
             display: flex;
             gap: 4px;
             margin-bottom: 20px;
-            background: rgba(26, 26, 46, 0.8);
+            background: #f0e6d8;
             border-radius: 12px;
             padding: 4px;
         }
@@ -78,9 +80,9 @@
         .tab.active {
             background: linear-gradient(135deg, var(--accent), var(--accent2));
             color: white;
+            box-shadow: 0 2px 8px rgba(249, 115, 22, 0.3);
         }
 
-        /* Panels */
         .panel {
             display: none;
         }
@@ -89,7 +91,6 @@
             display: block;
         }
 
-        /* Cards */
         .stats-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -98,11 +99,12 @@
         }
 
         .stat-card {
-            background: var(--card);
+            background: var(--card-bg);
             border: 1px solid var(--border);
             border-radius: 14px;
             padding: 16px;
             text-align: center;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
         }
 
         .stat-value {
@@ -110,6 +112,7 @@
             font-weight: 800;
             background: linear-gradient(135deg, var(--accent), var(--accent2));
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
         }
 
@@ -119,23 +122,22 @@
             margin-top: 4px;
         }
 
-        /* Section */
         .section {
-            background: var(--card);
+            background: var(--card-bg);
             border: 1px solid var(--border);
             border-radius: 14px;
             padding: 16px;
             margin-bottom: 16px;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
         }
 
         .section-title {
             font-size: 14px;
             font-weight: 700;
             margin-bottom: 12px;
-            color: #ccc;
+            color: #444;
         }
 
-        /* Chart */
         .chart {
             display: flex;
             align-items: flex-end;
@@ -167,11 +169,10 @@
 
         .chart-val {
             font-size: 10px;
-            color: #ccc;
+            color: #555;
             font-weight: 600;
         }
 
-        /* Hourly heatmap */
         .heatmap {
             display: grid;
             grid-template-columns: repeat(12, 1fr);
@@ -186,7 +187,7 @@
             justify-content: center;
             font-size: 9px;
             font-weight: 600;
-            color: rgba(255, 255, 255, 0.7);
+            color: #666;
             transition: transform 0.2s;
         }
 
@@ -194,7 +195,6 @@
             transform: scale(1.2);
         }
 
-        /* List */
         .list-item {
             display: flex;
             justify-content: space-between;
@@ -209,21 +209,20 @@
         }
 
         .list-email {
-            color: var(--accent);
+            color: var(--accent2);
             font-family: monospace;
             font-size: 12px;
         }
 
         .list-count {
-            background: rgba(102, 126, 234, 0.15);
-            color: var(--accent);
+            background: var(--accent-medium);
+            color: var(--accent2);
             padding: 2px 10px;
             border-radius: 10px;
             font-size: 12px;
             font-weight: 600;
         }
 
-        /* Category pills */
         .cat-row {
             display: flex;
             align-items: center;
@@ -234,7 +233,7 @@
         .cat-bar-bg {
             flex: 1;
             height: 8px;
-            background: rgba(255, 255, 255, 0.05);
+            background: var(--accent-light);
             border-radius: 4px;
             overflow: hidden;
         }
@@ -258,19 +257,9 @@
             text-align: right;
         }
 
-        /* Spam section */
-        .spam-alert {
-            background: rgba(248, 113, 113, 0.1);
-            border: 1px solid rgba(248, 113, 113, 0.3);
-            border-radius: 10px;
-            padding: 12px;
-            margin-bottom: 12px;
-            font-size: 13px;
-        }
-
         .spam-word {
             display: inline-block;
-            background: rgba(248, 113, 113, 0.15);
+            background: rgba(239, 68, 68, 0.1);
             color: var(--red);
             padding: 4px 10px;
             border-radius: 8px;
@@ -278,7 +267,6 @@
             margin: 3px;
         }
 
-        /* Loading */
         .loading {
             text-align: center;
             padding: 40px;
@@ -301,7 +289,6 @@
             }
         }
 
-        /* Weekday chart */
         .weekday-chart {
             display: flex;
             gap: 8px;
@@ -336,7 +323,7 @@
 
         .weekday-val {
             font-size: 11px;
-            color: #ccc;
+            color: #555;
             font-weight: 600;
             margin-bottom: 4px;
         }
@@ -353,7 +340,6 @@
         <div class="tab" onclick="showPanel('spam')">🛡️ Спам</div>
     </div>
 
-    <!-- OVERVIEW -->
     <div class="panel active" id="panel-overview">
         <div class="stats-grid" id="stats-cards"></div>
         <div class="section">
@@ -366,7 +352,6 @@
         </div>
     </div>
 
-    <!-- ANALYTICS -->
     <div class="panel" id="panel-analytics">
         <div class="section">
             <div class="section-title">🕐 Активність за годинами</div>
@@ -382,7 +367,6 @@
         </div>
     </div>
 
-    <!-- SPAM -->
     <div class="panel" id="panel-spam">
         <div class="stats-grid">
             <div class="stat-card">
@@ -410,10 +394,7 @@
 
     <script>
         const tg = window.Telegram?.WebApp;
-        if (tg) {
-            tg.ready();
-            tg.expand();
-        }
+        if (tg) { tg.ready(); tg.expand(); }
 
         const BASE = window.location.origin;
 
@@ -431,114 +412,74 @@
                     fetch(`${BASE}/api/analytics`).then(r => r.json()),
                     fetch(`${BASE}/api/spam`).then(r => r.json()),
                 ]);
-
                 renderOverview(statsRes, analyticsRes);
                 renderAnalytics(analyticsRes);
                 renderSpam(spamRes);
-            } catch (e) {
-                console.error('Load error:', e);
-            }
+            } catch (e) { console.error('Load error:', e); }
         }
 
         function renderOverview(stats, analytics) {
             document.getElementById('email-label').textContent = stats.email || '';
-
             document.getElementById('stats-cards').innerHTML = `
         <div class="stat-card"><div class="stat-value">${stats.today || 0}</div><div class="stat-label">📅 Сьогодні</div></div>
         <div class="stat-card"><div class="stat-value">${stats.week || 0}</div><div class="stat-label">📆 Тиждень</div></div>
         <div class="stat-card"><div class="stat-value">${stats.total || 0}</div><div class="stat-label">📈 Всього</div></div>
-        <div class="stat-card"><div class="stat-value">${stats.accounts || 1}</div><div class="stat-label">📧 Акаунтів</div></div>
-      `;
+        <div class="stat-card"><div class="stat-value">${stats.accounts || 1}</div><div class="stat-label">📧 Акаунтів</div></div>`;
 
-            // Trend chart
             const trend = analytics.trend || [];
             const max = Math.max(...trend.map(t => t.count), 1);
             document.getElementById('trend-chart').innerHTML = trend.map(t => `
         <div class="chart-col">
           <div class="chart-val">${t.count}</div>
-          <div class="chart-bar" style="height: ${Math.max((t.count / max) * 90, 2)}px"></div>
+          <div class="chart-bar" style="height:${Math.max((t.count / max) * 90, 2)}px"></div>
           <div class="chart-label">${t.date}</div>
-        </div>
-      `).join('');
+        </div>`).join('');
 
-            // Top senders
             const senders = analytics.topSenders || [];
             document.getElementById('top-senders').innerHTML = senders.length > 0
-                ? senders.map(s => `
-          <div class="list-item">
-            <span class="list-email">${s.email}</span>
-            <span class="list-count">${s.count}</span>
-          </div>
-        `).join('')
+                ? senders.map(s => `<div class="list-item"><span class="list-email">${s.email}</span><span class="list-count">${s.count}</span></div>`).join('')
                 : '<span style="color:var(--muted);font-size:13px">Ще немає даних</span>';
         }
 
         function renderAnalytics(data) {
-            // Hourly heatmap
             const hourly = data.hourly || new Array(24).fill(0);
             const maxH = Math.max(...hourly, 1);
             document.getElementById('hourly-heatmap').innerHTML = hourly.map((count, h) => {
                 const intensity = count / maxH;
-                const bg = intensity === 0
-                    ? 'rgba(255,255,255,0.03)'
-                    : `rgba(102,126,234,${0.15 + intensity * 0.85})`;
-                return `<div class="heat-cell" style="background:${bg}" title="${h}:00 — ${count} листів">${h}</div>`;
+                const bg = intensity === 0 ? 'rgba(249,115,22,0.04)' : `rgba(249,115,22,${0.1 + intensity * 0.5})`;
+                return `<div class="heat-cell" style="background:${bg}" title="${h}:00 — ${count}">${h}</div>`;
             }).join('');
 
-            // Weekday chart
             const weekday = data.weekday || new Array(7).fill(0);
             const dayNames = ['Нд', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
             const maxW = Math.max(...weekday, 1);
             document.getElementById('weekday-chart').innerHTML = weekday.map((count, i) => `
         <div class="weekday-item">
           <div class="weekday-val">${count}</div>
-          <div class="weekday-bar-wrap">
-            <div class="weekday-bar" style="height: ${Math.max((count / maxW) * 70, 4)}px"></div>
-          </div>
+          <div class="weekday-bar-wrap"><div class="weekday-bar" style="height:${Math.max((count / maxW) * 70, 4)}px"></div></div>
           <div class="weekday-label">${dayNames[i]}</div>
-        </div>
-      `).join('');
+        </div>`).join('');
 
-            // Categories
             const cats = data.categories || [];
             document.getElementById('categories-breakdown').innerHTML = cats.length > 0
-                ? cats.map(c => `
-          <div class="cat-row">
-            <span class="cat-name">${c.name}</span>
-            <div class="cat-bar-bg"><div class="cat-bar-fill" style="width:${c.pct}%"></div></div>
-            <span class="cat-pct">${c.pct}%</span>
-          </div>
-        `).join('')
+                ? cats.map(c => `<div class="cat-row"><span class="cat-name">${c.name}</span><div class="cat-bar-bg"><div class="cat-bar-fill" style="width:${c.pct}%"></div></div><span class="cat-pct">${c.pct}%</span></div>`).join('')
                 : '<span style="color:var(--muted);font-size:13px">Ще немає даних</span>';
         }
 
         function renderSpam(data) {
             document.getElementById('spam-blocked').textContent = data.totalBlocked || 0;
             document.getElementById('spam-words-count').textContent = (data.words || []).length;
-
-            // Blocked senders
             const senders = data.senders || [];
             document.getElementById('blocked-senders').innerHTML = senders.length > 0
                 ? senders.map(s => `<div class="list-item"><span class="list-email">${s}</span></div>`).join('')
                 : '<span style="color:var(--muted);font-size:13px">Немає</span>';
-
-            // Spam words
             const words = data.words || [];
             document.getElementById('spam-words-list').innerHTML = words.length > 0
                 ? words.map(w => `<span class="spam-word">${w}</span>`).join('')
-                : '<span style="color:var(--muted);font-size:13px">Додайте через /spam add &lt;слово&gt;</span>';
-
-            // Recent spam
+                : '<span style="color:var(--muted);font-size:13px">Додайте через /spam add</span>';
             const recent = data.recent || [];
             document.getElementById('recent-spam').innerHTML = recent.length > 0
-                ? recent.slice(0, 5).map(r => `
-          <div class="list-item">
-            <div>
-              <div style="font-size:13px;font-weight:500">${r.subject || '?'}</div>
-              <div class="list-email">${r.from || '?'}</div>
-            </div>
-          </div>
-        `).join('')
+                ? recent.slice(0, 5).map(r => `<div class="list-item"><div><div style="font-size:13px;font-weight:500">${r.subject || '?'}</div><div class="list-email">${r.from || '?'}</div></div></div>`).join('')
                 : '<span style="color:var(--muted);font-size:13px">Немає</span>';
         }
 
