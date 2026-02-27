@@ -30,14 +30,16 @@ for (const key of required) {
         process.exit(1);
     }
 }
-// First delete any existing webhook, then start polling
+// Don't start polling yet — will start in main() after cleanup
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
-bot.deleteWebHook().then(() => {
-    console.log('✅ Webhook видалено');
-    bot.startPolling();
-}).catch(e => {
-    console.log('⚠️ Webhook:', e.message);
-    bot.startPolling();
+
+// Handle 409 conflicts gracefully (deploy transitions)
+bot.on('polling_error', (err) => {
+    if (err.message && err.message.includes('409')) {
+        // Another instance — silently wait
+        return;
+    }
+    console.error('Polling error:', err.message);
 });
 const chatId = TELEGRAM_CHAT_ID;
 
@@ -764,6 +766,16 @@ async function main() {
     app.listen(parseInt(PORT), '0.0.0.0', () => {
         log(`🌐 Веб-панель: http://0.0.0.0:${PORT}`);
     });
+
+    // Delete webhook and start polling
+    try {
+        await bot.deleteWebHook();
+        log('✅ Webhook видалено');
+    } catch (e) {
+        log(`⚠️ Webhook: ${e.message}`);
+    }
+    bot.startPolling();
+    log('✅ Polling запущено');
 
     // Register command hints in Telegram
     await bot.setMyCommands([
