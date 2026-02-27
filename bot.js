@@ -30,8 +30,15 @@ for (const key of required) {
         process.exit(1);
     }
 }
-
-const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
+// First delete any existing webhook, then start polling
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
+bot.deleteWebHook().then(() => {
+    console.log('✅ Webhook видалено');
+    bot.startPolling();
+}).catch(e => {
+    console.log('⚠️ Webhook:', e.message);
+    bot.startPolling();
+});
 const chatId = TELEGRAM_CHAT_ID;
 
 // Store pending replies: messageId -> { to, subject, account }
