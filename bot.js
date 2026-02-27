@@ -3,6 +3,11 @@ const Imap = require('imap');
 const { simpleParser } = require('mailparser');
 const TelegramBot = require('node-telegram-bot-api');
 
+const store = require('./lib/store');
+const { formatEmailMessage, formatDigest, formatStats, esc } = require('./lib/formatter');
+const { sendReply } = require('./lib/smtp');
+const { createWebPanel } = require('./lib/web');
+
 // ─── Config ───────────────────────────────────────────────────────
 const {
     EMAIL_USER,
@@ -12,6 +17,7 @@ const {
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
     RECONNECT_DELAY = 5000,
+    PORT = 3000,
 } = process.env;
 
 const required = ['EMAIL_USER', 'EMAIL_PASSWORD', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'];
@@ -22,178 +28,569 @@ for (const key of required) {
     }
 }
 
-// Polling mode — works on Render without webhooks
 const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
 const chatId = TELEGRAM_CHAT_ID;
+
+// Store pending replies: messageId -> { to, subject, account }
+const pendingReplies = new Map();
 
 function log(msg) {
     const time = new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
     console.log(`[${time}] ${msg}`);
 }
 
-const esc = (t) => t ? t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '';
-
-// ─── Stats tracking ──────────────────────────────────────────────
-const stats = {
-    startedAt: new Date(),
-    emailsForwarded: 0,
-    lastEmailAt: null,
-    lastEmailSubject: null,
-    lastEmailFrom: null,
-};
-
-// ─── Pretty HTML formatting ──────────────────────────────────────
-function formatEmailMessage(parsed) {
-    const fromName = parsed.from?.value?.[0]?.name || '';
-    const fromEmail = parsed.from?.value?.[0]?.address || parsed.from?.text || 'невідомо';
-    const subject = parsed.subject || '(без теми)';
-    const date = parsed.date
-        ? parsed.date.toLocaleString('uk-UA', {
-            timeZone: 'Europe/Kyiv',
-            day: '2-digit', month: '2-digit', year: 'numeric',
-            hour: '2-digit', minute: '2-digit',
-        })
-        : 'невідома дата';
-
-    let body = parsed.text || '';
-    if (!body && parsed.html) {
-        body = parsed.html
-            .replace(/<br\s*\/?>/gi, '\n')
-            .replace(/<\/p>/gi, '\n\n')
-            .replace(/<[^>]+>/g, '')
-            .replace(/&nbsp;/g, ' ')
-            .replace(/&amp;/g, '&')
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .replace(/&quot;/g, '"')
-            .replace(/\n{3,}/g, '\n\n')
-            .trim();
-    }
-
-    if (body.length > 3200) {
-        body = body.substring(0, 3200) + '\n\n✂️ <i>...повідомлення обрізано</i>';
-    }
-
-    let attachLine = '';
-    if (parsed.attachments && parsed.attachments.length > 0) {
-        const attList = parsed.attachments.map(a => {
-            const size = a.size > 1024 * 1024
-                ? `${(a.size / 1024 / 1024).toFixed(1)} МБ`
-                : `${(a.size / 1024).toFixed(1)} КБ`;
-            return `📄 ${esc(a.filename || 'файл')} (${size})`;
-        }).join('\n');
-        attachLine = `\n\n📎 <b>Вкладення:</b>\n${attList}`;
-    }
-
-    return [
-        `📨 <b>НОВЕ ПИСЬМО</b>`,
-        `━━━━━━━━━━━━━━━━━━━━`,
-        ``,
-        `👤 <b>Від:</b> ${esc(fromName)}`,
-        `📧 <b>Email:</b> <code>${esc(fromEmail)}</code>`,
-        `📋 <b>Тема:</b> ${esc(subject)}`,
-        `📅 <b>Дата:</b> ${esc(date)}`,
-        ``,
-        `┄┄┄┄┄ <b>Текст листа</b> ┄┄┄┄┄`,
-        ``,
-        esc(body) || '<i>порожнє повідомлення</i>',
-        attachLine,
-    ].join('\n');
+// ─── Quiet mode check ────────────────────────────────────────────
+function isQuietHours() {
+    const hour = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Kyiv' })).getHours();
+    return hour >= 23 || hour < 7;
 }
 
 // ─── Send email to Telegram ──────────────────────────────────────
-async function sendToTelegram(parsed) {
-    const message = formatEmailMessage(parsed);
-    await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
+async function sendToTelegram(parsed, accountLabel) {
+    const fromEmail = parsed.from?.value?.[0]?.address || 'невідомо';
+    const subject = parsed.subject || '(без теми)';
 
-    // Update stats
-    stats.emailsForwarded++;
-    stats.lastEmailAt = new Date();
-    stats.lastEmailSubject = parsed.subject || '(без теми)';
-    stats.lastEmailFrom = parsed.from?.value?.[0]?.address || 'невідомо';
+    // Check filters
+    if (store.isFiltered(subject, fromEmail)) {
+        log(`🚫 Відфільтровано: "${subject}" від ${fromEmail}`);
+        return;
+    }
 
-    log(`✅ "${parsed.subject}" від ${stats.lastEmailFrom}`);
+    // Record stats
+    store.recordEmail(fromEmail, subject);
 
+    // Check mute / quiet hours
+    if (store.isMuted() || isQuietHours()) {
+        store.addToMuteQueue({ from: fromEmail, subject, date: new Date().toISOString() });
+        log(`🔕 В чергу (тихий режим): "${subject}"`);
+        return;
+    }
+
+    const message = formatEmailMessage(parsed, accountLabel);
+
+    // Create inline keyboard with Reply button
+    const keyboard = {
+        reply_markup: {
+            inline_keyboard: [[
+                { text: '✉️ Відповісти', callback_data: `reply_${Date.now()}` },
+            ]],
+        },
+        parse_mode: 'HTML',
+    };
+
+    const sent = await bot.sendMessage(chatId, message, keyboard);
+
+    // Store reply info
+    const account = accountLabel
+        ? store.getAccounts().find(a => a.user === accountLabel) || { user: EMAIL_USER, password: EMAIL_PASSWORD }
+        : { user: EMAIL_USER, password: EMAIL_PASSWORD };
+
+    pendingReplies.set(`reply_${sent.message_id}`, {
+        to: fromEmail,
+        subject: subject,
+        account: account,
+    });
+
+    // Also store by callback data
+    const cbKey = `reply_${Date.now()}`;
+    pendingReplies.set(cbKey, {
+        to: fromEmail,
+        subject: subject,
+        account: account,
+    });
+
+    log(`✅ "${subject}" від ${fromEmail}`);
+
+    // Send attachments
     if (parsed.attachments && parsed.attachments.length > 0) {
         for (const att of parsed.attachments) {
             if (att.size > 50 * 1024 * 1024) {
-                await bot.sendMessage(chatId,
-                    `⚠️ Вкладення "${att.filename}" занадто велике (${(att.size / 1024 / 1024).toFixed(1)} МБ)`
-                );
+                await bot.sendMessage(chatId, `⚠️ "${att.filename}" занадто велике`);
                 continue;
             }
             await bot.sendDocument(chatId, att.content, {}, {
                 filename: att.filename || 'attachment',
                 contentType: att.contentType,
             });
-            log(`📎 Вкладення: ${att.filename}`);
+            log(`📎 ${att.filename}`);
         }
     }
 }
+
+// ─── Callback: Reply button ──────────────────────────────────────
+bot.on('callback_query', async (query) => {
+    if (!query.data.startsWith('reply_')) return;
+
+    // Find reply info from the message
+    const replyInfo = Array.from(pendingReplies.values()).find(r =>
+        r.to && r.subject
+    );
+
+    if (!replyInfo) {
+        await bot.answerCallbackQuery(query.id, { text: '⏰ Дані для відповіді застаріли' });
+        return;
+    }
+
+    await bot.answerCallbackQuery(query.id);
+    await bot.sendMessage(chatId, [
+        `✉️ <b>Відповідь на лист:</b>`,
+        `📧 <b>Кому:</b> <code>${esc(replyInfo.to)}</code>`,
+        `📋 <b>Тема:</b> Re: ${esc(replyInfo.subject)}`,
+        ``,
+        `Напишіть текст відповіді:`,
+    ].join('\n'), { parse_mode: 'HTML', reply_markup: { force_reply: true } });
+
+    // Listen for reply
+    bot.once('message', async (msg) => {
+        if (String(msg.chat.id) !== String(chatId)) return;
+        if (!msg.text || msg.text.startsWith('/')) return;
+
+        try {
+            await sendReply(replyInfo.account, replyInfo.to, replyInfo.subject, msg.text);
+            await bot.sendMessage(chatId, `✅ Відповідь відправлено на <code>${esc(replyInfo.to)}</code>`, { parse_mode: 'HTML' });
+            log(`✉️ Відповідь → ${replyInfo.to}`);
+        } catch (err) {
+            await bot.sendMessage(chatId, `❌ Помилка: <code>${esc(err.message)}</code>`, { parse_mode: 'HTML' });
+            log(`❌ SMTP: ${err.message}`);
+        }
+    });
+});
 
 // ─── Bot Commands ────────────────────────────────────────────────
 bot.onText(/\/start/, (msg) => {
     if (String(msg.chat.id) !== String(chatId)) return;
     bot.sendMessage(msg.chat.id, [
-        `🤖 <b>Email → Telegram Bot</b>`,
-        ``,
-        `Пересилаю листи з пошти`,
-        `<code>${esc(EMAIL_USER)}</code> сюди в чат.`,
+        `🤖 <b>Email → Telegram Bot v3</b>`,
         ``,
         `📋 <b>Команди:</b>`,
-        `• /status — стан бота і пошти`,
-        `• /last — останній пересланий лист`,
-        `• /help — довідка`,
+        `/status — стан бота`,
+        `/stats — статистика листів`,
+        `/digest — дайджест за сьогодні`,
+        `/search &lt;слово&gt; — пошук листів`,
+        `/filter — керування фільтрами`,
+        `/mute — тихий режим`,
+        `/unmute — вимкнути тихий`,
+        `/accounts — підключені акаунти`,
+        `/addmail — додати акаунт`,
+        `/help — довідка`,
     ].join('\n'), { parse_mode: 'HTML' });
 });
 
 bot.onText(/\/help/, (msg) => {
     if (String(msg.chat.id) !== String(chatId)) return;
     bot.sendMessage(msg.chat.id, [
-        `📋 <b>Команди:</b>`,
+        `📋 <b>Усі команди:</b>`,
         ``,
-        `/status — 📊 стан бота, пошти, статистика`,
-        `/last — 📩 інфо про останній лист`,
-        `/help — 📋 ця довідка`,
+        `📊 <b>Інформація:</b>`,
+        `/status — стан бота і пошти`,
+        `/stats — статистика за сьогодні/тиждень/місяць`,
+        `/digest — дайджест за сьогодні`,
+        `/search &lt;слово&gt; — пошук за темою/відправником`,
+        ``,
+        `⚙️ <b>Налаштування:</b>`,
+        `/mute — 🔕 тихий режим (листи в чергу)`,
+        `/unmute — 🔔 вимкнути тихий`,
+        `/filter add &lt;слово&gt; — ігнорувати листи`,
+        `/filter remove &lt;слово&gt; — прибрати фільтр`,
+        `/filter list — список фільтрів`,
+        ``,
+        `📧 <b>Акаунти:</b>`,
+        `/accounts — список підключених`,
+        `/addmail — додати акаунт`,
+        `/removemail &lt;email&gt; — видалити акаунт`,
+        ``,
+        `✉️ <b>Відповідь:</b>`,
+        `Натисніть кнопку "Відповісти" під листом`,
     ].join('\n'), { parse_mode: 'HTML' });
 });
 
-bot.onText(/\/status/, async (msg) => {
+bot.onText(/\/status/, (msg) => {
     if (String(msg.chat.id) !== String(chatId)) return;
-
-    const uptime = formatUptime(Date.now() - stats.startedAt.getTime());
+    const data = store.get();
+    const uptime = formatUptime(Date.now() - startedAt);
     const now = new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
+    const accounts = data.accounts.map(a => a.user);
 
     bot.sendMessage(msg.chat.id, [
         `📊 <b>Стан бота</b>`,
         `━━━━━━━━━━━━━━━━━━━━`,
         ``,
-        `📧 <b>Пошта:</b> <code>${esc(EMAIL_USER)}</code>`,
         `✅ <b>Статус:</b> працює`,
         `⏱ <b>Аптайм:</b> ${uptime}`,
-        `📬 <b>Листів переслано:</b> ${stats.emailsForwarded}`,
+        `📧 <b>Основна пошта:</b> <code>${esc(EMAIL_USER)}</code>`,
+        accounts.length > 0 ? `📧 <b>Додаткові:</b> ${accounts.map(a => `<code>${esc(a)}</code>`).join(', ')}` : '',
+        `🔕 <b>Тихий режим:</b> ${data.muted ? 'увімкнено' : 'вимкнено'}`,
+        `⚡ <b>Фільтри:</b> ${data.filters.length > 0 ? data.filters.join(', ') : 'немає'}`,
+        `📬 <b>Переслано:</b> ${data.stats.totalForwarded}`,
         `⏰ <b>Час:</b> ${now}`,
-        stats.lastEmailAt ? `\n📩 <b>Останній лист:</b> ${stats.lastEmailAt.toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' })}` : '',
-    ].join('\n'), { parse_mode: 'HTML' });
+    ].filter(Boolean).join('\n'), { parse_mode: 'HTML' });
 });
 
-bot.onText(/\/last/, (msg) => {
+bot.onText(/\/stats/, (msg) => {
     if (String(msg.chat.id) !== String(chatId)) return;
+    const today = store.getStatsForPeriod(1);
+    const week = store.getStatsForPeriod(7);
+    const month = store.getStatsForPeriod(30);
+    bot.sendMessage(msg.chat.id, formatStats(today, week, month), { parse_mode: 'HTML' });
+});
 
-    if (!stats.lastEmailAt) {
-        bot.sendMessage(msg.chat.id, '📭 Ще не було пересланих листів з моменту запуску.', { parse_mode: 'HTML' });
-        return;
+bot.onText(/\/digest/, (msg) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const digest = store.getTodayDigest();
+    bot.sendMessage(msg.chat.id, formatDigest(digest, today), { parse_mode: 'HTML' });
+});
+
+// ── Mute/Unmute
+bot.onText(/\/mute/, (msg) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    if (msg.text === '/mute') {
+        store.setMuted(true);
+        bot.sendMessage(msg.chat.id, `🔕 <b>Тихий режим увімкнено.</b>\nЛисти будуть зберігатися в черзі.\nВведіть /unmute щоб отримати їх.`, { parse_mode: 'HTML' });
+        log('🔕 Mute ON');
     }
+});
 
+bot.onText(/\/unmute/, async (msg) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    store.setMuted(false);
+    const queue = store.flushMuteQueue();
+
+    if (queue.length > 0) {
+        let summary = queue.map((e, i) => `  ${i + 1}. <b>${esc(e.subject)}</b> від <code>${esc(e.from)}</code>`).join('\n');
+        await bot.sendMessage(msg.chat.id, [
+            `🔔 <b>Тихий режим вимкнено!</b>`,
+            ``,
+            `📬 Пропущено ${queue.length} листів:`,
+            summary,
+        ].join('\n'), { parse_mode: 'HTML' });
+    } else {
+        await bot.sendMessage(msg.chat.id, `🔔 <b>Тихий режим вимкнено.</b> Пропущених листів немає.`, { parse_mode: 'HTML' });
+    }
+    log('🔔 Mute OFF');
+});
+
+// ── Filters
+bot.onText(/\/filter(.*)/, (msg, match) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    const args = (match[1] || '').trim().split(' ');
+    const action = args[0];
+    const keyword = args.slice(1).join(' ');
+
+    if (action === 'add' && keyword) {
+        store.addFilter(keyword);
+        bot.sendMessage(msg.chat.id, `✅ Фільтр додано: <b>${esc(keyword)}</b>\nЛисти з цим словом будуть ігноруватися.`, { parse_mode: 'HTML' });
+        log(`⚡ Filter +: ${keyword}`);
+    } else if (action === 'remove' && keyword) {
+        store.removeFilter(keyword);
+        bot.sendMessage(msg.chat.id, `🗑 Фільтр видалено: <b>${esc(keyword)}</b>`, { parse_mode: 'HTML' });
+        log(`⚡ Filter -: ${keyword}`);
+    } else if (action === 'list' || !action) {
+        const filters = store.getFilters();
+        bot.sendMessage(msg.chat.id, filters.length > 0
+            ? `⚡ <b>Фільтри:</b>\n${filters.map(f => `  • ${esc(f)}`).join('\n')}`
+            : '⚡ Фільтрів немає.\n\nДодати: /filter add &lt;слово&gt;',
+            { parse_mode: 'HTML' }
+        );
+    } else {
+        bot.sendMessage(msg.chat.id, [
+            '⚡ <b>Використання:</b>',
+            '/filter add &lt;слово&gt; — додати',
+            '/filter remove &lt;слово&gt; — видалити',
+            '/filter list — список',
+        ].join('\n'), { parse_mode: 'HTML' });
+    }
+});
+
+// ── Search
+bot.onText(/\/search (.+)/, async (msg, match) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    const query = match[1].trim();
+
+    await bot.sendMessage(msg.chat.id, `🔍 Шукаю "<b>${esc(query)}</b>"...`, { parse_mode: 'HTML' });
+
+    try {
+        const results = await searchEmails(query);
+        if (results.length === 0) {
+            bot.sendMessage(msg.chat.id, `🔍 Нічого не знайдено за "<b>${esc(query)}</b>"`, { parse_mode: 'HTML' });
+        } else {
+            const list = results.slice(0, 10).map((r, i) =>
+                `${i + 1}. <b>${esc(r.subject)}</b>\n   📧 ${esc(r.from)} | 📅 ${esc(r.date)}`
+            ).join('\n\n');
+            bot.sendMessage(msg.chat.id, [
+                `🔍 <b>Результати (${results.length}):</b>`,
+                ``,
+                list,
+            ].join('\n'), { parse_mode: 'HTML' });
+        }
+    } catch (err) {
+        bot.sendMessage(msg.chat.id, `❌ Помилка пошуку: <code>${esc(err.message)}</code>`, { parse_mode: 'HTML' });
+    }
+});
+
+// ── Accounts
+bot.onText(/\/accounts/, (msg) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    const accounts = store.getAccounts();
     bot.sendMessage(msg.chat.id, [
-        `📩 <b>Останній пересланий лист</b>`,
+        `📧 <b>Підключені акаунти:</b>`,
         `━━━━━━━━━━━━━━━━━━━━`,
         ``,
-        `📋 <b>Тема:</b> ${esc(stats.lastEmailSubject)}`,
-        `👤 <b>Від:</b> <code>${esc(stats.lastEmailFrom)}</code>`,
-        `📅 <b>Коли:</b> ${stats.lastEmailAt.toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' })}`,
-    ].join('\n'), { parse_mode: 'HTML' });
+        `🟢 <code>${esc(EMAIL_USER)}</code> <i>(основний)</i>`,
+        ...accounts.map(a => `🟢 <code>${esc(a.user)}</code>`),
+        ``,
+        `Додати: /addmail`,
+        accounts.length > 0 ? `Видалити: /removemail &lt;email&gt;` : '',
+    ].filter(Boolean).join('\n'), { parse_mode: 'HTML' });
 });
+
+// ── Add mail — step by step
+const addMailState = {};
+
+bot.onText(/\/addmail/, (msg) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    addMailState[msg.chat.id] = { step: 'email' };
+    bot.sendMessage(msg.chat.id, [
+        `📧 <b>Додавання нового акаунту</b>`,
+        ``,
+        `Введіть email адресу:`,
+    ].join('\n'), { parse_mode: 'HTML', reply_markup: { force_reply: true } });
+});
+
+bot.on('message', async (msg) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    if (!msg.text || msg.text.startsWith('/')) return;
+
+    const state = addMailState[msg.chat.id];
+    if (!state) return;
+
+    if (state.step === 'email') {
+        state.user = msg.text.trim();
+        state.step = 'password';
+        bot.sendMessage(msg.chat.id, `🔑 Введіть IMAP пароль для <code>${esc(state.user)}</code>:`, { parse_mode: 'HTML', reply_markup: { force_reply: true } });
+    } else if (state.step === 'password') {
+        state.password = msg.text.trim();
+        state.step = 'host';
+        // Try to auto-detect host
+        const domain = state.user.split('@')[1];
+        const guessHost = `imap.${domain}`;
+        bot.sendMessage(msg.chat.id, `🌐 IMAP сервер (натисніть кнопку або введіть свій):`, {
+            parse_mode: 'HTML',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: `📧 ${guessHost}`, callback_data: `imaphost_${guessHost}` }],
+                    [{ text: '📧 imap.gmail.com', callback_data: 'imaphost_imap.gmail.com' }],
+                    [{ text: '📧 outlook.office365.com', callback_data: 'imaphost_outlook.office365.com' }],
+                ],
+            },
+        });
+    } else if (state.step === 'host') {
+        finishAddMail(msg.chat.id, msg.text.trim());
+    }
+});
+
+bot.on('callback_query', async (query) => {
+    if (query.data.startsWith('imaphost_')) {
+        const host = query.data.replace('imaphost_', '');
+        await bot.answerCallbackQuery(query.id);
+        finishAddMail(query.message.chat.id, host);
+    }
+});
+
+function finishAddMail(chatIdFrom, host) {
+    const state = addMailState[chatIdFrom];
+    if (!state || !state.user || !state.password) return;
+
+    const account = {
+        user: state.user,
+        password: state.password,
+        imapHost: host,
+        imapPort: '993',
+        smtpHost: `smtp.${state.user.split('@')[1]}`,
+        smtpPort: '465',
+    };
+
+    store.addAccount(account);
+    delete addMailState[chatIdFrom];
+
+    bot.sendMessage(chatIdFrom, [
+        `✅ <b>Акаунт додано!</b>`,
+        `📧 ${esc(account.user)}`,
+        `🌐 ${esc(host)}`,
+        ``,
+        `Підключаюсь до IMAP...`,
+    ].join('\n'), { parse_mode: 'HTML' });
+
+    log(`📧 Акаунт додано: ${account.user}`);
+    startIMAPForAccount(account);
+}
+
+bot.onText(/\/removemail (.+)/, (msg, match) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    const email = match[1].trim();
+    store.removeAccount(email);
+    bot.sendMessage(msg.chat.id, `🗑 Акаунт <code>${esc(email)}</code> видалено.`, { parse_mode: 'HTML' });
+    log(`🗑 Акаунт видалено: ${email}`);
+});
+
+// ─── IMAP Search ─────────────────────────────────────────────────
+function searchEmails(query) {
+    return new Promise((resolve, reject) => {
+        const imap = new Imap({
+            user: EMAIL_USER,
+            password: EMAIL_PASSWORD,
+            host: IMAP_HOST,
+            port: parseInt(IMAP_PORT),
+            tls: true,
+            tlsOptions: { rejectUnauthorized: false },
+            connTimeout: 15000,
+            authTimeout: 15000,
+        });
+
+        imap.once('ready', () => {
+            imap.openBox('INBOX', true, (err) => {
+                if (err) { imap.end(); return reject(err); }
+
+                imap.search([['OR', ['SUBJECT', query], ['FROM', query]]], (err, results) => {
+                    if (err) { imap.end(); return reject(err); }
+
+                    if (!results || results.length === 0) {
+                        imap.end();
+                        return resolve([]);
+                    }
+
+                    // Get last 10
+                    const ids = results.slice(-10);
+                    const emails = [];
+
+                    const fetch = imap.fetch(ids, { bodies: 'HEADER.FIELDS (FROM SUBJECT DATE)', struct: true });
+
+                    fetch.on('message', (msg) => {
+                        let header = '';
+                        msg.on('body', (stream) => {
+                            stream.on('data', (chunk) => { header += chunk.toString('utf8'); });
+                        });
+                        msg.on('end', () => {
+                            const fromMatch = header.match(/From: (.+)/i);
+                            const subjectMatch = header.match(/Subject: (.+)/i);
+                            const dateMatch = header.match(/Date: (.+)/i);
+                            emails.push({
+                                from: fromMatch ? fromMatch[1].trim() : '?',
+                                subject: subjectMatch ? subjectMatch[1].trim() : '?',
+                                date: dateMatch ? dateMatch[1].trim() : '?',
+                            });
+                        });
+                    });
+
+                    fetch.once('end', () => {
+                        imap.end();
+                        resolve(emails.reverse());
+                    });
+
+                    fetch.once('error', (err) => {
+                        imap.end();
+                        reject(err);
+                    });
+                });
+            });
+        });
+
+        imap.once('error', reject);
+        imap.connect();
+    });
+}
+
+// ─── IMAP Persistent Connection ──────────────────────────────────
+function startIMAPForAccount(account) {
+    const imap = new Imap({
+        user: account.user,
+        password: account.password,
+        host: account.imapHost || IMAP_HOST,
+        port: parseInt(account.imapPort || IMAP_PORT),
+        tls: true,
+        tlsOptions: { rejectUnauthorized: false },
+        keepalive: { interval: 10000, idleInterval: 300000, forceNoop: true },
+    });
+
+    let startUid = null;
+    const label = account.user;
+
+    function processNew() {
+        if (startUid === null) return;
+        imap.search([['UID', `${startUid + 1}:*`]], (err, results) => {
+            if (err) { log(`❌ [${label}] Пошук: ${err.message}`); return; }
+            const newR = results ? results.filter(uid => uid > startUid) : [];
+            if (newR.length === 0) return;
+
+            log(`📬 [${label}] ${newR.length} нових`);
+            const fetch = imap.fetch(newR, { bodies: '', markSeen: true, struct: true });
+
+            fetch.on('message', (msg) => {
+                let raw = '';
+                let uid = null;
+                msg.on('attributes', (a) => { uid = a.uid; });
+                msg.on('body', (s) => { s.on('data', (c) => { raw += c.toString('utf8'); }); });
+                msg.on('end', async () => {
+                    try {
+                        const parsed = await simpleParser(raw);
+                        await sendToTelegram(parsed, label);
+                        if (uid && uid > startUid) startUid = uid;
+                    } catch (e) { log(`❌ [${label}] Parse: ${e.message}`); }
+                });
+            });
+
+            fetch.once('error', (e) => log(`❌ [${label}] Fetch: ${e.message}`));
+            fetch.once('end', () => log(`✅ [${label}] Оброблено`));
+        });
+    }
+
+    imap.once('ready', () => {
+        log(`✅ [${label}] IMAP підключено`);
+        imap.openBox('INBOX', false, (err, box) => {
+            if (err) { log(`❌ [${label}] INBOX: ${err.message}`); return; }
+            startUid = box.uidnext - 1;
+            log(`📭 [${label}] ${box.messages.total} листів | UID: ${startUid}`);
+            imap.on('mail', (n) => { log(`📨 [${label}] +${n}`); processNew(); });
+        });
+    });
+
+    imap.once('error', (e) => { log(`❌ [${label}] IMAP: ${e.message}`); reconnect(); });
+    imap.once('end', () => { log(`⚠️ [${label}] IMAP закрито`); reconnect(); });
+
+    let reco = false;
+    function reconnect() {
+        if (reco) return;
+        reco = true;
+        setTimeout(() => { reco = false; startIMAPForAccount(account); }, parseInt(RECONNECT_DELAY));
+    }
+
+    log(`🔌 [${label}] Підключення...`);
+    imap.connect();
+}
+
+// ─── Mute queue flush timer ──────────────────────────────────────
+setInterval(async () => {
+    // Flush queue at 07:00 Kyiv time
+    const hour = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Kyiv' })).getHours();
+    const min = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Kyiv' })).getMinutes();
+    if (hour === 7 && min === 0 && store.isMuted()) {
+        const queue = store.flushMuteQueue();
+        if (queue.length > 0) {
+            const summary = queue.map((e, i) =>
+                `${i + 1}. <b>${esc(e.subject)}</b> від <code>${esc(e.from)}</code>`
+            ).join('\n');
+            await bot.sendMessage(chatId, [
+                `☀️ <b>Доброго ранку! Ось пропущені листи:</b>`,
+                ``,
+                summary,
+            ].join('\n'), { parse_mode: 'HTML' });
+            log(`☀️ Flush: ${queue.length} leaves`);
+        }
+    }
+}, 60000);
+
+// ─── Helpers ─────────────────────────────────────────────────────
+const startedAt = Date.now();
 
 function formatUptime(ms) {
     const s = Math.floor(ms / 1000);
@@ -207,118 +604,55 @@ function formatUptime(ms) {
     return parts.join(' ');
 }
 
-// ─── IMAP Connection (persistent with IDLE) ──────────────────────
-function startIMAP() {
-    const imap = new Imap({
-        user: EMAIL_USER,
-        password: EMAIL_PASSWORD,
-        host: IMAP_HOST,
-        port: parseInt(IMAP_PORT),
-        tls: true,
-        tlsOptions: { rejectUnauthorized: false },
-        keepalive: { interval: 10000, idleInterval: 300000, forceNoop: true },
-    });
-
-    let startUid = null;
-
-    function processNewEmails() {
-        if (startUid === null) return;
-
-        imap.search([['UID', `${startUid + 1}:*`]], (err, results) => {
-            if (err) { log(`❌ Пошук: ${err.message}`); return; }
-
-            const newResults = results ? results.filter(uid => uid > startUid) : [];
-            if (newResults.length === 0) return;
-
-            log(`📬 ${newResults.length} нових листів`);
-
-            const fetch = imap.fetch(newResults, { bodies: '', markSeen: true, struct: true });
-
-            fetch.on('message', (msg) => {
-                let rawEmail = '';
-                let msgUid = null;
-
-                msg.on('attributes', (attrs) => { msgUid = attrs.uid; });
-                msg.on('body', (stream) => {
-                    stream.on('data', (chunk) => { rawEmail += chunk.toString('utf8'); });
-                });
-                msg.on('end', async () => {
-                    try {
-                        const parsed = await simpleParser(rawEmail);
-                        await sendToTelegram(parsed);
-                        if (msgUid && msgUid > startUid) startUid = msgUid;
-                    } catch (err) {
-                        log(`❌ Парсинг: ${err.message}`);
-                    }
-                });
-            });
-
-            fetch.once('error', (err) => log(`❌ Fetch: ${err.message}`));
-            fetch.once('end', () => log('✅ Оброблено'));
-        });
-    }
-
-    imap.once('ready', () => {
-        log('✅ Підключено до IMAP');
-        imap.openBox('INBOX', false, (err, box) => {
-            if (err) { log(`❌ INBOX: ${err.message}`); return; }
-
-            startUid = box.uidnext - 1;
-            log(`📭 INBOX: ${box.messages.total} листів | UID: ${startUid}`);
-            log('👂 Чекаю на нові листи...');
-
-            imap.on('mail', (n) => {
-                log(`📨 +${n} лист(ів)`);
-                processNewEmails();
-            });
-        });
-    });
-
-    imap.once('error', (err) => { log(`❌ IMAP: ${err.message}`); scheduleReconnect(); });
-    imap.once('end', () => { log('⚠️ IMAP закрито'); scheduleReconnect(); });
-
-    let reconnecting = false;
-    function scheduleReconnect() {
-        if (reconnecting) return;
-        reconnecting = true;
-        const delay = parseInt(RECONNECT_DELAY);
-        log(`🔄 Перепідключення через ${delay / 1000}с...`);
-        setTimeout(() => { reconnecting = false; startIMAP(); }, delay);
-    }
-
-    log('🔌 Підключення до IMAP...');
-    imap.connect();
-}
-
 // ─── Startup ──────────────────────────────────────────────────────
 async function main() {
     console.log('');
     console.log('╔═══════════════════════════════════════════╗');
-    console.log('║   📧 → 💬  Email to Telegram Bot  v2.0   ║');
-    console.log('║   UKR.NET → Telegram                     ║');
+    console.log('║   📧 → 💬  Email to Telegram Bot  v3.0   ║');
+    console.log('║   Full-featured Email Bot                 ║');
     console.log('╚═══════════════════════════════════════════╝');
     console.log('');
-    log(`📧 ${EMAIL_USER}`);
-    log(`💬 Chat ID: ${TELEGRAM_CHAT_ID}`);
-    log(`🤖 Telegram polling запущено`);
+    log(`📧 Main: ${EMAIL_USER}`);
+    log(`💬 Chat: ${TELEGRAM_CHAT_ID}`);
 
+    // Start web panel
+    const app = createWebPanel({ mainEmail: EMAIL_USER });
+    app.listen(PORT, () => {
+        log(`🌐 Веб-панель: http://localhost:${PORT}`);
+    });
+
+    // Notify on Telegram
     try {
+        const accounts = store.getAccounts();
         await bot.sendMessage(chatId, [
-            `🤖 <b>Бот запущено!</b>`,
+            `🤖 <b>Bot v3.0 запущено!</b>`,
             ``,
             `📧 <code>${esc(EMAIL_USER)}</code>`,
+            accounts.length > 0 ? `📧 + ${accounts.length} додаткових акаунтів` : '',
             `⏰ ${new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' })}`,
             ``,
-            `Нові листи будуть з'являтися тут.`,
             `Введіть /help для списку команд.`,
-        ].join('\n'), { parse_mode: 'HTML' });
-        log('✅ Telegram OK');
+        ].filter(Boolean).join('\n'), { parse_mode: 'HTML' });
     } catch (err) {
         log(`❌ Telegram: ${err.message}`);
         process.exit(1);
     }
 
-    startIMAP();
+    // Start main IMAP
+    startIMAPForAccount({
+        user: EMAIL_USER,
+        password: EMAIL_PASSWORD,
+        imapHost: IMAP_HOST,
+        imapPort: IMAP_PORT,
+    });
+
+    // Start extra accounts
+    const extraAccounts = store.getAccounts();
+    for (const acc of extraAccounts) {
+        startIMAPForAccount(acc);
+    }
+
+    log(`🚀 Запущено ${1 + extraAccounts.length} IMAP з'єднань`);
 }
 
 main();

@@ -1,9 +1,9 @@
 services:
-  - type: worker
+  - type: web
     name: email-telegram-bot
     runtime: node
     buildCommand: npm install
-    startCommand: npm start
+    startCommand: node bot.js
     envVars:
       - key: EMAIL_USER
         sync: false
@@ -17,3 +17,5 @@ services:
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
+      - key: PORT
+        value: "10000"
