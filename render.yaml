@@ -1,0 +1,19 @@
+services:
+  - type: worker
+    name: email-telegram-bot
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: EMAIL_USER
+        sync: false
+      - key: EMAIL_PASSWORD
+        sync: false
+      - key: IMAP_HOST
+        value: imap.ukr.net
+      - key: IMAP_PORT
+        value: "993"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false

@@ -22,7 +22,8 @@ for (const key of required) {
     }
 }
 
-const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
+// Polling mode — works on Render without webhooks
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
 const chatId = TELEGRAM_CHAT_ID;
 
 function log(msg) {
@@ -31,6 +32,15 @@ function log(msg) {
 }
 
 const esc = (t) => t ? t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '';
+
+// ─── Stats tracking ──────────────────────────────────────────────
+const stats = {
+    startedAt: new Date(),
+    emailsForwarded: 0,
+    lastEmailAt: null,
+    lastEmailSubject: null,
+    lastEmailFrom: null,
+};
 
 // ─── Pretty HTML formatting ──────────────────────────────────────
 function formatEmailMessage(parsed) {
@@ -96,6 +106,14 @@ async function sendToTelegram(parsed) {
     const message = formatEmailMessage(parsed);
     await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
 
+    // Update stats
+    stats.emailsForwarded++;
+    stats.lastEmailAt = new Date();
+    stats.lastEmailSubject = parsed.subject || '(без теми)';
+    stats.lastEmailFrom = parsed.from?.value?.[0]?.address || 'невідомо';
+
+    log(`✅ "${parsed.subject}" від ${stats.lastEmailFrom}`);
+
     if (parsed.attachments && parsed.attachments.length > 0) {
         for (const att of parsed.attachments) {
             if (att.size > 50 * 1024 * 1024) {
@@ -113,7 +131,83 @@ async function sendToTelegram(parsed) {
     }
 }
 
-// ─── IMAP Connection (local mode with IDLE) ──────────────────────
+// ─── Bot Commands ────────────────────────────────────────────────
+bot.onText(/\/start/, (msg) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    bot.sendMessage(msg.chat.id, [
+        `🤖 <b>Email → Telegram Bot</b>`,
+        ``,
+        `Пересилаю листи з пошти`,
+        `<code>${esc(EMAIL_USER)}</code> сюди в чат.`,
+        ``,
+        `📋 <b>Команди:</b>`,
+        `• /status — стан бота і пошти`,
+        `• /last — останній пересланий лист`,
+        `• /help — довідка`,
+    ].join('\n'), { parse_mode: 'HTML' });
+});
+
+bot.onText(/\/help/, (msg) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+    bot.sendMessage(msg.chat.id, [
+        `📋 <b>Команди:</b>`,
+        ``,
+        `/status — 📊 стан бота, пошти, статистика`,
+        `/last — 📩 інфо про останній лист`,
+        `/help — 📋 ця довідка`,
+    ].join('\n'), { parse_mode: 'HTML' });
+});
+
+bot.onText(/\/status/, async (msg) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+
+    const uptime = formatUptime(Date.now() - stats.startedAt.getTime());
+    const now = new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
+
+    bot.sendMessage(msg.chat.id, [
+        `📊 <b>Стан бота</b>`,
+        `━━━━━━━━━━━━━━━━━━━━`,
+        ``,
+        `📧 <b>Пошта:</b> <code>${esc(EMAIL_USER)}</code>`,
+        `✅ <b>Статус:</b> працює`,
+        `⏱ <b>Аптайм:</b> ${uptime}`,
+        `📬 <b>Листів переслано:</b> ${stats.emailsForwarded}`,
+        `⏰ <b>Час:</b> ${now}`,
+        stats.lastEmailAt ? `\n📩 <b>Останній лист:</b> ${stats.lastEmailAt.toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' })}` : '',
+    ].join('\n'), { parse_mode: 'HTML' });
+});
+
+bot.onText(/\/last/, (msg) => {
+    if (String(msg.chat.id) !== String(chatId)) return;
+
+    if (!stats.lastEmailAt) {
+        bot.sendMessage(msg.chat.id, '📭 Ще не було пересланих листів з моменту запуску.', { parse_mode: 'HTML' });
+        return;
+    }
+
+    bot.sendMessage(msg.chat.id, [
+        `📩 <b>Останній пересланий лист</b>`,
+        `━━━━━━━━━━━━━━━━━━━━`,
+        ``,
+        `📋 <b>Тема:</b> ${esc(stats.lastEmailSubject)}`,
+        `👤 <b>Від:</b> <code>${esc(stats.lastEmailFrom)}</code>`,
+        `📅 <b>Коли:</b> ${stats.lastEmailAt.toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' })}`,
+    ].join('\n'), { parse_mode: 'HTML' });
+});
+
+function formatUptime(ms) {
+    const s = Math.floor(ms / 1000);
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const parts = [];
+    if (d > 0) parts.push(`${d}д`);
+    if (h > 0) parts.push(`${h}г`);
+    parts.push(`${m}хв`);
+    return parts.join(' ');
+}
+
+// ─── IMAP Connection (persistent with IDLE) ──────────────────────
 function startIMAP() {
     const imap = new Imap({
         user: EMAIL_USER,
@@ -201,20 +295,22 @@ async function main() {
     console.log('');
     console.log('╔═══════════════════════════════════════════╗');
     console.log('║   📧 → 💬  Email to Telegram Bot  v2.0   ║');
-    console.log('║   UKR.NET → Telegram (Local Mode)        ║');
+    console.log('║   UKR.NET → Telegram                     ║');
     console.log('╚═══════════════════════════════════════════╝');
     console.log('');
     log(`📧 ${EMAIL_USER}`);
     log(`💬 Chat ID: ${TELEGRAM_CHAT_ID}`);
+    log(`🤖 Telegram polling запущено`);
 
     try {
         await bot.sendMessage(chatId, [
-            `🤖 <b>Бот запущено!</b> (локальний режим)`,
+            `🤖 <b>Бот запущено!</b>`,
             ``,
             `📧 <code>${esc(EMAIL_USER)}</code>`,
             `⏰ ${new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' })}`,
             ``,
-            `Нові листи будуть відправлятися сюди.`,
+            `Нові листи будуть з'являтися тут.`,
+            `Введіть /help для списку команд.`,
         ].join('\n'), { parse_mode: 'HTML' });
         log('✅ Telegram OK');
     } catch (err) {

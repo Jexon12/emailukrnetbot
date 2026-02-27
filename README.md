@@ -2,13 +2,13 @@
 
 Telegram-бот, який пересилає листи з **UKR.NET** у ваш Telegram-чат.
 
-## 🚀 Два режими роботи
+## ✨ Можливості
 
-### Локальний (`npm start`)
-Постійне IMAP-підключення з IDLE — миттєве отримання листів.
-
-### Vercel (serverless)
-Cron кожні 2 хв → перевіряє UNSEEN листи → відправляє в Telegram.
+- 📨 Миттєва пересилка нових листів (IMAP IDLE)
+- 📎 Вкладення як документи в Telegram
+- 🤖 Команди: `/status`, `/last`, `/help`
+- 📊 Статистика роботи
+- 🔄 Автоматичне перепідключення
 
 ---
 
@@ -35,33 +35,24 @@ TELEGRAM_CHAT_ID=your_chat_id
 npm start
 ```
 
-## ☁️ Деплой на Vercel
+## ☁️ Деплой на Render.com
 
-1. **Встановіть Vercel CLI**: `npm i -g vercel`
-2. **Деплой**: `vercel --prod`
-3. **Environment Variables**: додайте всі змінні з `.env` у Vercel Dashboard → Settings → Environment Variables
-4. **Webhook**: `node setup-webhook.js https://your-app.vercel.app`
+1. Залийте код на **GitHub**
+2. Зайдіть на [render.com](https://render.com) → **New → Background Worker**
+3. Підключіть ваш GitHub репозиторій
+4. Налаштування:
+   - **Build Command:** `npm install`
+   - **Start Command:** `npm start`
+5. Додайте **Environment Variables** (як у `.env`)
+6. Натисніть **Create Background Worker**
+
+> 💡 Або натисніть "Blueprint" і Render автоматично візьме `render.yaml`
 
 ## 🤖 Команди бота
 
 | Команда | Опис |
 |---------|------|
-| `/start` | Привітання та список команд |
-| `/status` | Статус пошти (всього/непрочитаних) |
-| `/last` | Показати останній лист |
+| `/start` | Привітання |
+| `/status` | Стан бота і статистика |
+| `/last` | Останній пересланий лист |
 | `/help` | Довідка |
-
-## 📁 Структура
-
-```
-email-telegram-bot/
-├── api/
-│   ├── check-email.js   # Cron: перевірка пошти
-│   └── webhook.js       # Telegram команди
-├── bot.js               # Локальний режим (IMAP IDLE)
-├── setup-webhook.js     # Реєстрація webhook
-├── vercel.json          # Cron конфіг
-├── package.json
-├── .env
-└── .gitignore
-```
