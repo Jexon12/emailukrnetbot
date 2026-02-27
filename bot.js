@@ -226,6 +226,7 @@ bot.onText(/\/help/, (msg) => {
         `📊 <b>Інформація:</b>`,
         `/status — стан бота і пошти`,
         `/stats — статистика за сьогодні/тиждень/місяць`,
+        `/analytics — аналітика (піки, тренди, категорії)`,
         `/digest — дайджест за сьогодні`,
         `/search &lt;слово&gt; — пошук за темою/відправником`,
         ``,
@@ -236,13 +237,20 @@ bot.onText(/\/help/, (msg) => {
         `/filter remove &lt;слово&gt; — прибрати фільтр`,
         `/filter list — список фільтрів`,
         ``,
+        `🛡️ <b>Спам-фільтр:</b>`,
+        `/spam — статус фільтра`,
+        `/spam add &lt;слово&gt; — додати спам-слово`,
+        `/spam block &lt;email&gt; — заблокувати відправника`,
+        ``,
         `📧 <b>Акаунти:</b>`,
         `/accounts — список підключених`,
         `/addmail — додати акаунт`,
         `/removemail &lt;email&gt; — видалити акаунт`,
         ``,
-        `✉️ <b>Відповідь:</b>`,
-        `Натисніть кнопку "Відповісти" під листом`,
+        `📱 <b>Інше:</b>`,
+        `/miniapp — відкрити Mini App`,
+        `✉️ Кнопка "Відповісти" під кожним листом`,
+        `🛡️ Кнопка "Спам" — заблокувати в 1 клік`,
     ].join('\n'), { parse_mode: 'HTML' });
 });
 
@@ -739,7 +747,7 @@ function formatUptime(ms) {
 async function main() {
     console.log('');
     console.log('╔═══════════════════════════════════════════╗');
-    console.log('║   📧 → 💬  Email to Telegram Bot  v3.0   ║');
+    console.log('║   📧 → 💬  Email to Telegram Bot  v4.0   ║');
     console.log('║   Full-featured Email Bot                 ║');
     console.log('╚═══════════════════════════════════════════╝');
     console.log('');
@@ -750,6 +758,24 @@ async function main() {
         log(`🌐 Веб-панель: http://0.0.0.0:${PORT}`);
     });
 
+    // Register command hints in Telegram
+    await bot.setMyCommands([
+        { command: 'status', description: '📊 Стан бота' },
+        { command: 'stats', description: '📈 Статистика листів' },
+        { command: 'analytics', description: '📈 Аналітика (піки, тренди)' },
+        { command: 'digest', description: '📋 Дайджест за сьогодні' },
+        { command: 'search', description: '🔍 Пошук листів' },
+        { command: 'filter', description: '⚡ Керування фільтрами' },
+        { command: 'spam', description: '🛡️ Спам-фільтр' },
+        { command: 'mute', description: '🔕 Тихий режим' },
+        { command: 'unmute', description: '🔔 Вимкнути тихий' },
+        { command: 'accounts', description: '📧 Підключені акаунти' },
+        { command: 'addmail', description: '📧 Додати акаунт' },
+        { command: 'miniapp', description: '📱 Відкрити Mini App' },
+        { command: 'help', description: '📋 Довідка' },
+    ]);
+    log('✅ Команди зареєстровано');
+
     log(`📧 Main: ${EMAIL_USER}`);
     log(`💬 Chat: ${TELEGRAM_CHAT_ID}`);
 
@@ -757,7 +783,7 @@ async function main() {
     try {
         const accounts = store.getAccounts();
         await bot.sendMessage(chatId, [
-            `🤖 <b>Bot v3.0 запущено!</b>`,
+            `🤖 <b>Bot v4.0 запущено!</b>`,
             ``,
             `📧 <code>${esc(EMAIL_USER)}</code>`,
             accounts.length > 0 ? `📧 + ${accounts.length} додаткових акаунтів` : '',
