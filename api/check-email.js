@@ -10,11 +10,20 @@ const {
     IMAP_PORT = '993',
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
-    CRON_SECRET,
 } = process.env;
 
-const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
-const chatId = TELEGRAM_CHAT_ID;
+// ─── Validate env vars early ─────────────────────────────────────
+function validateEnv() {
+    const missing = [];
+    if (!EMAIL_USER) missing.push('EMAIL_USER');
+    if (!EMAIL_PASSWORD) missing.push('EMAIL_PASSWORD');
+    if (!TELEGRAM_BOT_TOKEN) missing.push('TELEGRAM_BOT_TOKEN');
+    if (!TELEGRAM_CHAT_ID) missing.push('TELEGRAM_CHAT_ID');
+    return missing;
+}
+
+// ─── HTML escape ─────────────────────────────────────────────────
+const esc = (t) => t ? t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '';
 
 // ─── Pretty HTML message formatting ──────────────────────────────
 function formatEmailMessage(parsed) {
@@ -24,15 +33,11 @@ function formatEmailMessage(parsed) {
     const date = parsed.date
         ? parsed.date.toLocaleString('uk-UA', {
             timeZone: 'Europe/Kyiv',
-            day: '2-digit',
-            month: '2-digit',
-            year: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
+            day: '2-digit', month: '2-digit', year: 'numeric',
+            hour: '2-digit', minute: '2-digit',
         })
         : 'невідома дата';
 
-    // Get text content
     let body = parsed.text || '';
     if (!body && parsed.html) {
         body = parsed.html
@@ -48,16 +53,10 @@ function formatEmailMessage(parsed) {
             .trim();
     }
 
-    // Trim if too long
-    const maxLen = 3200;
-    if (body.length > maxLen) {
-        body = body.substring(0, maxLen) + '\n\n✂️ <i>...повідомлення обрізано</i>';
+    if (body.length > 3200) {
+        body = body.substring(0, 3200) + '\n\n✂️ <i>...повідомлення обрізано</i>';
     }
 
-    // Escape HTML special chars in user content
-    const esc = (t) => t ? t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') : '';
-
-    // Attachments summary
     let attachLine = '';
     if (parsed.attachments && parsed.attachments.length > 0) {
         const attList = parsed.attachments.map(a => {
@@ -86,34 +85,33 @@ function formatEmailMessage(parsed) {
 }
 
 // ─── Send email to Telegram ──────────────────────────────────────
-async function sendToTelegram(parsed) {
+async function sendToTelegram(bot, parsed) {
     const message = formatEmailMessage(parsed);
+    await bot.sendMessage(TELEGRAM_CHAT_ID, message, { parse_mode: 'HTML' });
 
-    await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
-
-    // Send attachments as files
     if (parsed.attachments && parsed.attachments.length > 0) {
         for (const att of parsed.attachments) {
             if (att.size > 50 * 1024 * 1024) {
-                await bot.sendMessage(
-                    chatId,
-                    `⚠️ Вкладення "${att.filename}" занадто велике (${(att.size / 1024 / 1024).toFixed(1)} МБ)`,
-                    { parse_mode: 'HTML' }
+                await bot.sendMessage(TELEGRAM_CHAT_ID,
+                    `⚠️ Вкладення "${att.filename}" занадто велике (${(att.size / 1024 / 1024).toFixed(1)} МБ)`
                 );
                 continue;
             }
-            const fileOptions = {
+            await bot.sendDocument(TELEGRAM_CHAT_ID, att.content, {}, {
                 filename: att.filename || 'attachment',
                 contentType: att.contentType,
-            };
-            await bot.sendDocument(chatId, att.content, {}, fileOptions);
+            });
         }
     }
 }
 
 // ─── IMAP: connect, fetch UNSEEN, send, disconnect ───────────────
-function checkEmails() {
+function checkEmails(bot) {
     return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            reject(new Error('IMAP connection timeout (25s)'));
+        }, 25000);
+
         const imap = new Imap({
             user: EMAIL_USER,
             password: EMAIL_PASSWORD,
@@ -125,28 +123,28 @@ function checkEmails() {
             authTimeout: 15000,
         });
 
-        let processed = 0;
-
         imap.once('ready', () => {
             imap.openBox('INBOX', false, (err, box) => {
                 if (err) {
+                    clearTimeout(timeout);
                     imap.end();
                     return reject(err);
                 }
 
                 imap.search(['UNSEEN'], async (err, results) => {
                     if (err) {
+                        clearTimeout(timeout);
                         imap.end();
                         return reject(err);
                     }
 
                     if (!results || results.length === 0) {
+                        clearTimeout(timeout);
                         imap.end();
                         return resolve({ processed: 0, total: box.messages.total });
                     }
 
                     const emails = [];
-
                     const fetch = imap.fetch(results, {
                         bodies: '',
                         markSeen: true,
@@ -155,34 +153,34 @@ function checkEmails() {
 
                     fetch.on('message', (msg) => {
                         let rawEmail = '';
-
                         msg.on('body', (stream) => {
                             stream.on('data', (chunk) => {
                                 rawEmail += chunk.toString('utf8');
                             });
                         });
-
                         msg.on('end', () => {
                             emails.push(rawEmail);
                         });
                     });
 
                     fetch.once('error', (err) => {
+                        clearTimeout(timeout);
                         imap.end();
                         reject(err);
                     });
 
                     fetch.once('end', async () => {
-                        // Parse and send all emails
+                        let processed = 0;
                         for (const raw of emails) {
                             try {
                                 const parsed = await simpleParser(raw);
-                                await sendToTelegram(parsed);
+                                await sendToTelegram(bot, parsed);
                                 processed++;
                             } catch (e) {
                                 console.error('Parse/send error:', e.message);
                             }
                         }
+                        clearTimeout(timeout);
                         imap.end();
                         resolve({ processed, total: box.messages.total });
                     });
@@ -191,6 +189,7 @@ function checkEmails() {
         });
 
         imap.once('error', (err) => {
+            clearTimeout(timeout);
             reject(err);
         });
 
@@ -200,16 +199,24 @@ function checkEmails() {
 
 // ─── Vercel Serverless Handler ───────────────────────────────────
 module.exports = async (req, res) => {
-    // Verify cron secret (optional security)
-    if (CRON_SECRET && req.headers['authorization'] !== `Bearer ${CRON_SECRET}`) {
-        return res.status(401).json({ error: 'Unauthorized' });
+    console.log('check-email invoked');
+
+    // Check env vars
+    const missing = validateEnv();
+    if (missing.length > 0) {
+        console.error('Missing env vars:', missing.join(', '));
+        return res.status(500).json({
+            ok: false,
+            error: `Missing environment variables: ${missing.join(', ')}`,
+        });
     }
 
     try {
-        const result = await checkEmails();
+        const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
+        const result = await checkEmails(bot);
         const timestamp = new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
 
-        console.log(`[${timestamp}] Checked: ${result.processed} new emails sent to Telegram`);
+        console.log(`[${timestamp}] Processed: ${result.processed} emails`);
 
         return res.status(200).json({
             ok: true,
@@ -218,7 +225,10 @@ module.exports = async (req, res) => {
             totalInbox: result.total,
         });
     } catch (err) {
-        console.error('Error checking emails:', err.message);
-        return res.status(500).json({ ok: false, error: err.message });
+        console.error('Error:', err.message, err.stack);
+        return res.status(500).json({
+            ok: false,
+            error: err.message,
+        });
     }
 };
