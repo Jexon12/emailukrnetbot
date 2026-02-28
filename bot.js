@@ -7,6 +7,8 @@ const store = require('./lib/store');
 const { formatEmailMessage, formatDigest, formatStats, esc } = require('./lib/formatter');
 const { sendReply } = require('./lib/smtp');
 const { createWebPanel } = require('./lib/web');
+const { check: rateLimitCheck } = require('./lib/rateLimit');
+const logger = require('./lib/logger');
 const { calculateSpamScore, recordSpam, getSpamStats, addSpamWord, removeSpamWord, getSpamWords, addSpamSender, removeSpamSender, getSpamSenders } = require('./lib/spam');
 const { recordAnalytics, getPeakHours, getPeakDays, getTopSenders, getCategoryBreakdown, getDailyTrend } = require('./lib/analytics');
 const { categorize } = require('./lib/categories');
@@ -21,6 +23,10 @@ const {
     TELEGRAM_CHAT_ID,
     RECONNECT_DELAY = 5000,
     PORT = 3000,
+    QUIET_START = 23,
+    QUIET_END = 7,
+    TLS_REJECT_UNAUTHORIZED = 'true',
+    IMAP_MAX_RECONNECT_ATTEMPTS = 10,
 } = process.env;
 
 const required = ['EMAIL_USER', 'EMAIL_PASSWORD', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'];
@@ -43,18 +49,32 @@ bot.on('polling_error', (err) => {
 });
 const chatId = TELEGRAM_CHAT_ID;
 
-// Store pending replies: messageId -> { to, subject, account }
-const pendingReplies = new Map();
+const MAX_PENDING_REPLIES = 100;
+const REPLY_TIMEOUT_MS = 5 * 60 * 1000;
 
-function log(msg) {
-    const time = new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
-    console.log(`[${time}] ${msg}`);
+const pendingReplies = new Map();
+const replyState = new Map();
+
+function prunePendingReplies() {
+    if (pendingReplies.size <= MAX_PENDING_REPLIES) return;
+    const entries = [...pendingReplies.entries()].sort((a, b) => (a[1].createdAt || 0) - (b[1].createdAt || 0));
+    entries.slice(0, entries.length - MAX_PENDING_REPLIES).forEach(([k]) => pendingReplies.delete(k));
 }
 
-// ─── Quiet mode check ────────────────────────────────────────────
+function log(msg) {
+    logger.info(msg);
+}
+
+function isAllowedChat(chatIdStr) {
+    return String(chatIdStr) === String(chatId);
+}
+
 function isQuietHours() {
     const hour = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Kyiv' })).getHours();
-    return hour >= 23 || hour < 7;
+    const start = parseInt(QUIET_START, 10) || 23;
+    const end = parseInt(QUIET_END, 10) || 7;
+    if (start > end) return hour >= start || hour < end;
+    return hour >= start && hour < end;
 }
 
 // ─── Send email to Telegram ──────────────────────────────────────
@@ -126,7 +146,8 @@ async function sendToTelegram(parsed, accountLabel) {
         ? store.getAccounts().find(a => a.user === accountLabel) || { user: EMAIL_USER, password: EMAIL_PASSWORD }
         : { user: EMAIL_USER, password: EMAIL_PASSWORD };
 
-    pendingReplies.set(cbReply, { to: fromEmail, subject, account });
+    pendingReplies.set(cbReply, { to: fromEmail, subject, account, createdAt: Date.now() });
+    prunePendingReplies();
 
     log(`✅ "${subject}" від ${fromEmail}`);
 
@@ -148,6 +169,7 @@ async function sendToTelegram(parsed, accountLabel) {
 
 // ─── Callback: Reply button ──────────────────────────────────────
 bot.on('callback_query', async (query) => {
+    if (!isAllowedChat(query.message?.chat?.id)) return;
     const data = query.data;
 
     // Reply button
@@ -158,22 +180,36 @@ bot.on('callback_query', async (query) => {
             return;
         }
         await bot.answerCallbackQuery(query.id);
+        const cid = String(query.message.chat.id);
+
+        const timeoutId = setTimeout(() => {
+            replyState.delete(cid);
+            pendingReplies.delete(data);
+            bot.sendMessage(chatId, '⏰ Час вийшов. Натисніть "Відповісти" знову.', { parse_mode: 'HTML' }).catch(() => {});
+        }, REPLY_TIMEOUT_MS);
+
+        replyState.set(cid, { cbReply: data, replyInfo, timeoutId });
         await bot.sendMessage(chatId, [
             `✉️ <b>Відповідь на лист:</b>`,
             `📧 <b>Кому:</b> <code>${esc(replyInfo.to)}</code>`,
             `📋 <b>Тема:</b> Re: ${esc(replyInfo.subject)}`,
-            ``, `Напишіть текст відповіді:`,
+            ``,
+            `Напишіть текст відповіді (або /cancel):`,
         ].join('\n'), { parse_mode: 'HTML', reply_markup: { force_reply: true } });
+    }
 
-        bot.once('message', async (msg) => {
-            if (String(msg.chat.id) !== String(chatId) || !msg.text || msg.text.startsWith('/')) return;
-            try {
-                await sendReply(replyInfo.account, replyInfo.to, replyInfo.subject, msg.text);
-                await bot.sendMessage(chatId, `✅ Відправлено на <code>${esc(replyInfo.to)}</code>`, { parse_mode: 'HTML' });
-            } catch (err) {
-                await bot.sendMessage(chatId, `❌ SMTP: <code>${esc(err.message)}</code>`, { parse_mode: 'HTML' });
-            }
-        });
+    // Cancel reply
+    if (data.startsWith('cancelreply_')) {
+        const cbReply = data.replace('cancelreply_', '');
+        const cid = String(query.message.chat.id);
+        const state = replyState.get(cid);
+        if (state && state.cbReply === cbReply) {
+            clearTimeout(state.timeoutId);
+            replyState.delete(cid);
+            pendingReplies.delete(cbReply);
+            await bot.answerCallbackQuery(query.id, { text: '❌ Скасовано' });
+            await bot.sendMessage(chatId, '❌ Відповідь скасовано.', { parse_mode: 'HTML' });
+        }
     }
 
     // Mark as spam
@@ -204,11 +240,26 @@ bot.on('callback_query', async (query) => {
         await bot.answerCallbackQuery(query.id);
         finishAddMail(query.message.chat.id, host);
     }
+
+    // Remove mail confirmation
+    if (data === 'removemail_no') {
+        await bot.answerCallbackQuery(query.id, { text: 'Скасовано' });
+        await bot.editMessageText('❌ Скасовано.', { chat_id: query.message.chat.id, message_id: query.message.message_id });
+    }
+    if (data.startsWith('removemail_yes_')) {
+        const email = Buffer.from(data.replace('removemail_yes_', ''), 'base64').toString('utf8');
+        store.removeAccount(email);
+        await bot.answerCallbackQuery(query.id, { text: 'Видалено' });
+        await bot.editMessageText(`🗑 Акаунт <code>${esc(email)}</code> видалено.`, {
+            chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: 'HTML',
+        });
+        log(`🗑 Акаунт видалено: ${email}`);
+    }
 });
 
 // ─── Bot Commands ────────────────────────────────────────────────
 bot.onText(/\/start/, (msg) => {
-    if (String(msg.chat.id) !== String(chatId)) return;
+    if (!isAllowedChat(msg.chat.id)) return;
     bot.sendMessage(msg.chat.id, [
         `🤖 <b>Email → Telegram Bot v4</b>`,
         ``,
@@ -228,7 +279,7 @@ bot.onText(/\/start/, (msg) => {
 });
 
 bot.onText(/\/help/, (msg) => {
-    if (String(msg.chat.id) !== String(chatId)) return;
+    if (!isAllowedChat(msg.chat.id)) return;
     bot.sendMessage(msg.chat.id, [
         `📋 <b>Усі команди:</b>`,
         ``,
@@ -264,7 +315,7 @@ bot.onText(/\/help/, (msg) => {
 });
 
 bot.onText(/\/status/, (msg) => {
-    if (String(msg.chat.id) !== String(chatId)) return;
+    if (!isAllowedChat(msg.chat.id)) return;
     const data = store.get();
     const uptime = formatUptime(Date.now() - startedAt);
     const now = new Date().toLocaleString('uk-UA', { timeZone: 'Europe/Kyiv' });
@@ -286,7 +337,7 @@ bot.onText(/\/status/, (msg) => {
 });
 
 bot.onText(/\/stats/, (msg) => {
-    if (String(msg.chat.id) !== String(chatId)) return;
+    if (!isAllowedChat(msg.chat.id)) return;
     const today = store.getStatsForPeriod(1);
     const week = store.getStatsForPeriod(7);
     const month = store.getStatsForPeriod(30);
@@ -294,7 +345,7 @@ bot.onText(/\/stats/, (msg) => {
 });
 
 bot.onText(/\/digest/, (msg) => {
-    if (String(msg.chat.id) !== String(chatId)) return;
+    if (!isAllowedChat(msg.chat.id)) return;
     const today = new Date().toISOString().slice(0, 10);
     const digest = store.getTodayDigest();
     bot.sendMessage(msg.chat.id, formatDigest(digest, today), { parse_mode: 'HTML' });
@@ -302,7 +353,7 @@ bot.onText(/\/digest/, (msg) => {
 
 // ── Analytics
 bot.onText(/\/analytics/, (msg) => {
-    if (String(msg.chat.id) !== String(chatId)) return;
+    if (!isAllowedChat(msg.chat.id)) return;
     const peaks = getPeakHours();
     const days = getPeakDays();
     const topS = getTopSenders(5);
@@ -334,7 +385,7 @@ bot.onText(/\/analytics/, (msg) => {
 
 // ── Spam commands
 bot.onText(/\/spam(.*)/, (msg, match) => {
-    if (String(msg.chat.id) !== String(chatId)) return;
+    if (!isAllowedChat(msg.chat.id)) return;
     const args = (match[1] || '').trim().split(' ');
     const action = args[0];
     const value = args.slice(1).join(' ');
@@ -383,7 +434,7 @@ bot.onText(/\/spam(.*)/, (msg, match) => {
 
 // ── Mini App command
 bot.onText(/\/miniapp/, (msg) => {
-    if (String(msg.chat.id) !== String(chatId)) return;
+    if (!isAllowedChat(msg.chat.id)) return;
     const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
     bot.sendMessage(msg.chat.id, `📱 <b>Mini App:</b>`, {
         parse_mode: 'HTML',
@@ -397,7 +448,7 @@ bot.onText(/\/miniapp/, (msg) => {
 
 // ── Mute/Unmute
 bot.onText(/\/mute/, (msg) => {
-    if (String(msg.chat.id) !== String(chatId)) return;
+    if (!isAllowedChat(msg.chat.id)) return;
     if (msg.text === '/mute') {
         store.setMuted(true);
         bot.sendMessage(msg.chat.id, `🔕 <b>Тихий режим увімкнено.</b>\nЛисти будуть зберігатися в черзі.\nВведіть /unmute щоб отримати їх.`, { parse_mode: 'HTML' });
@@ -406,7 +457,7 @@ bot.onText(/\/mute/, (msg) => {
 });
 
 bot.onText(/\/unmute/, async (msg) => {
-    if (String(msg.chat.id) !== String(chatId)) return;
+    if (!isAllowedChat(msg.chat.id)) return;
     store.setMuted(false);
     const queue = store.flushMuteQueue();
 
@@ -426,7 +477,7 @@ bot.onText(/\/unmute/, async (msg) => {
 
 // ── Filters
 bot.onText(/\/filter(.*)/, (msg, match) => {
-    if (String(msg.chat.id) !== String(chatId)) return;
+    if (!isAllowedChat(msg.chat.id)) return;
     const args = (match[1] || '').trim().split(' ');
     const action = args[0];
     const keyword = args.slice(1).join(' ');
@@ -458,19 +509,21 @@ bot.onText(/\/filter(.*)/, (msg, match) => {
 
 // ── Search
 bot.onText(/\/search (.+)/, async (msg, match) => {
-    if (String(msg.chat.id) !== String(chatId)) return;
+    if (!isAllowedChat(msg.chat.id)) return;
+    if (!rateLimitCheck(`tg:${msg.chat.id}`, 20)) return;
     const query = match[1].trim();
 
     await bot.sendMessage(msg.chat.id, `🔍 Шукаю "<b>${esc(query)}</b>"...`, { parse_mode: 'HTML' });
 
     try {
-        const results = await searchEmails(query);
+        const results = await searchEmails(query, 20);
         if (results.length === 0) {
             bot.sendMessage(msg.chat.id, `🔍 Нічого не знайдено за "<b>${esc(query)}</b>"`, { parse_mode: 'HTML' });
         } else {
-            const list = results.slice(0, 10).map((r, i) =>
-                `${i + 1}. <b>${esc(r.subject)}</b>\n   📧 ${esc(r.from)} | 📅 ${esc(r.date)}`
-            ).join('\n\n');
+            const list = results.map((r, i) => {
+                const accLine = r.account && r.account !== EMAIL_USER ? ` | 📪 ${esc(r.account)}` : '';
+                return `${i + 1}. <b>${esc(r.subject)}</b>\n   📧 ${esc(r.from)} | 📅 ${esc(r.date)}${accLine}`;
+            }).join('\n\n');
             bot.sendMessage(msg.chat.id, [
                 `🔍 <b>Результати (${results.length}):</b>`,
                 ``,
@@ -484,7 +537,7 @@ bot.onText(/\/search (.+)/, async (msg, match) => {
 
 // ── Accounts
 bot.onText(/\/accounts/, (msg) => {
-    if (String(msg.chat.id) !== String(chatId)) return;
+    if (!isAllowedChat(msg.chat.id)) return;
     const accounts = store.getAccounts();
     bot.sendMessage(msg.chat.id, [
         `📧 <b>Підключені акаунти:</b>`,
@@ -502,7 +555,7 @@ bot.onText(/\/accounts/, (msg) => {
 const addMailState = {};
 
 bot.onText(/\/addmail/, (msg) => {
-    if (String(msg.chat.id) !== String(chatId)) return;
+    if (!isAllowedChat(msg.chat.id)) return;
     addMailState[msg.chat.id] = { step: 'email' };
     bot.sendMessage(msg.chat.id, [
         `📧 <b>Додавання нового акаунту</b>`,
@@ -512,8 +565,34 @@ bot.onText(/\/addmail/, (msg) => {
 });
 
 bot.on('message', async (msg) => {
-    if (String(msg.chat.id) !== String(chatId)) return;
-    if (!msg.text || msg.text.startsWith('/')) return;
+    if (!isAllowedChat(msg.chat.id)) return;
+    if (!msg.text) return;
+
+    // Reply flow: user typed reply text or /cancel
+    const replyStateEntry = replyState.get(String(msg.chat.id));
+    if (replyStateEntry) {
+        if (msg.text === '/cancel') {
+            clearTimeout(replyStateEntry.timeoutId);
+            replyState.delete(String(msg.chat.id));
+            pendingReplies.delete(replyStateEntry.cbReply);
+            await bot.sendMessage(chatId, '❌ Відповідь скасовано.', { parse_mode: 'HTML' });
+            return;
+        }
+        if (msg.text.startsWith('/')) return;
+        const { cbReply, replyInfo, timeoutId } = replyStateEntry;
+        clearTimeout(timeoutId);
+        replyState.delete(String(msg.chat.id));
+        pendingReplies.delete(cbReply);
+        try {
+            await sendReply(replyInfo.account, replyInfo.to, replyInfo.subject, msg.text);
+            await bot.sendMessage(chatId, `✅ Відправлено на <code>${esc(replyInfo.to)}</code>`, { parse_mode: 'HTML' });
+        } catch (err) {
+            await bot.sendMessage(chatId, `❌ SMTP: <code>${esc(err.message)}</code>`, { parse_mode: 'HTML' });
+        }
+        return;
+    }
+
+    if (msg.text.startsWith('/')) return;
 
     const state = addMailState[msg.chat.id];
     if (!state) return;
@@ -560,6 +639,7 @@ function finishAddMail(chatIdFrom, host) {
 
     store.addAccount(account);
     delete addMailState[chatIdFrom];
+    if (state.password) state.password = '';
 
     bot.sendMessage(chatIdFrom, [
         `✅ <b>Акаунт додано!</b>`,
@@ -574,50 +654,54 @@ function finishAddMail(chatIdFrom, host) {
 }
 
 bot.onText(/\/removemail (.+)/, (msg, match) => {
-    if (String(msg.chat.id) !== String(chatId)) return;
+    if (!isAllowedChat(msg.chat.id)) return;
+    if (!rateLimitCheck(`tg:${msg.chat.id}`, 30)) return;
     const email = match[1].trim();
-    store.removeAccount(email);
-    bot.sendMessage(msg.chat.id, `🗑 Акаунт <code>${esc(email)}</code> видалено.`, { parse_mode: 'HTML' });
-    log(`🗑 Акаунт видалено: ${email}`);
+    const accounts = store.getAccounts();
+    if (!accounts.some(a => a.user === email)) {
+        bot.sendMessage(msg.chat.id, `❌ Акаунт <code>${esc(email)}</code> не знайдено.`, { parse_mode: 'HTML' });
+        return;
+    }
+    bot.sendMessage(msg.chat.id, `🗑 Видалити акаунт <code>${esc(email)}</code>?`, {
+        parse_mode: 'HTML',
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: '✅ Так', callback_data: `removemail_yes_${Buffer.from(email).toString('base64')}` }],
+                [{ text: '❌ Ні', callback_data: 'removemail_no' }],
+            ],
+        },
+    });
 });
 
-// ─── IMAP Search ─────────────────────────────────────────────────
-function searchEmails(query) {
-    return new Promise((resolve, reject) => {
+
+// ─── IMAP Search (single account) ─────────────────────────────────
+function searchImapAccount(account, query, limit = 15) {
+    return new Promise((resolve) => {
         const imap = new Imap({
-            user: EMAIL_USER,
-            password: EMAIL_PASSWORD,
-            host: IMAP_HOST,
-            port: parseInt(IMAP_PORT),
+            user: account.user,
+            password: account.password,
+            host: account.imapHost || IMAP_HOST,
+            port: parseInt(account.imapPort || IMAP_PORT),
             tls: true,
-            tlsOptions: { rejectUnauthorized: false },
+            tlsOptions: { rejectUnauthorized: TLS_REJECT_UNAUTHORIZED !== 'false' },
             connTimeout: 15000,
             authTimeout: 15000,
         });
 
         imap.once('ready', () => {
             imap.openBox('INBOX', true, (err) => {
-                if (err) { imap.end(); return reject(err); }
-
+                if (err) { imap.end(); return resolve([]); }
                 imap.search([['OR', ['SUBJECT', query], ['FROM', query]]], (err, results) => {
-                    if (err) { imap.end(); return reject(err); }
-
-                    if (!results || results.length === 0) {
+                    if (err || !results || results.length === 0) {
                         imap.end();
                         return resolve([]);
                     }
-
-                    // Get last 10
-                    const ids = results.slice(-10);
+                    const ids = results.slice(-limit);
                     const emails = [];
-
                     const fetch = imap.fetch(ids, { bodies: 'HEADER.FIELDS (FROM SUBJECT DATE)', struct: true });
-
                     fetch.on('message', (msg) => {
                         let header = '';
-                        msg.on('body', (stream) => {
-                            stream.on('data', (chunk) => { header += chunk.toString('utf8'); });
-                        });
+                        msg.on('body', (s) => { s.on('data', (c) => { header += c.toString('utf8'); }); });
                         msg.on('end', () => {
                             const fromMatch = header.match(/From: (.+)/i);
                             const subjectMatch = header.match(/Subject: (.+)/i);
@@ -626,42 +710,50 @@ function searchEmails(query) {
                                 from: fromMatch ? fromMatch[1].trim() : '?',
                                 subject: subjectMatch ? subjectMatch[1].trim() : '?',
                                 date: dateMatch ? dateMatch[1].trim() : '?',
+                                account: account.user,
                             });
                         });
                     });
-
-                    fetch.once('end', () => {
-                        imap.end();
-                        resolve(emails.reverse());
-                    });
-
-                    fetch.once('error', (err) => {
-                        imap.end();
-                        reject(err);
-                    });
+                    fetch.once('end', () => { imap.end(); resolve(emails.reverse()); });
+                    fetch.once('error', () => { imap.end(); resolve([]); });
                 });
             });
         });
-
-        imap.once('error', reject);
+        imap.once('error', () => { imap.end(); resolve([]); });
         imap.connect();
     });
 }
 
+async function searchEmails(query, limit = 20) {
+    const accounts = [
+        { user: EMAIL_USER, password: EMAIL_PASSWORD, imapHost: IMAP_HOST, imapPort: IMAP_PORT },
+        ...store.getAccounts(),
+    ];
+    const perAccount = Math.ceil(limit / accounts.length) + 2;
+    const results = await Promise.all(accounts.map(acc => searchImapAccount(acc, query, perAccount)));
+    const merged = results.flat();
+    return merged.slice(0, limit);
+}
+
 // ─── IMAP Persistent Connection ──────────────────────────────────
+const imapReconnectAttempts = new Map();
+
 function startIMAPForAccount(account) {
+    const label = account.user;
+    const attempts = imapReconnectAttempts.get(label) || 0;
+    const maxAttempts = parseInt(IMAP_MAX_RECONNECT_ATTEMPTS, 10) || 10;
+
     const imap = new Imap({
         user: account.user,
         password: account.password,
         host: account.imapHost || IMAP_HOST,
         port: parseInt(account.imapPort || IMAP_PORT),
         tls: true,
-        tlsOptions: { rejectUnauthorized: false },
+        tlsOptions: { rejectUnauthorized: TLS_REJECT_UNAUTHORIZED !== 'false' },
         keepalive: { interval: 10000, idleInterval: 300000, forceNoop: true },
     });
 
     let startUid = null;
-    const label = account.user;
 
     function processNew() {
         if (startUid === null) return;
@@ -693,6 +785,7 @@ function startIMAPForAccount(account) {
     }
 
     imap.once('ready', () => {
+        imapReconnectAttempts.delete(label);
         log(`✅ [${label}] IMAP підключено`);
         imap.openBox('INBOX', false, (err, box) => {
             if (err) { log(`❌ [${label}] INBOX: ${err.message}`); return; }
@@ -709,7 +802,16 @@ function startIMAPForAccount(account) {
     function reconnect() {
         if (reco) return;
         reco = true;
-        setTimeout(() => { reco = false; startIMAPForAccount(account); }, parseInt(RECONNECT_DELAY));
+        imapReconnectAttempts.set(label, attempts + 1);
+        if (attempts + 1 >= maxAttempts) {
+            log(`⚠️ [${label}] Максимум спроб перепідключення (${maxAttempts}). Зупиняю.`);
+            imapReconnectAttempts.delete(label);
+            return;
+        }
+        const baseDelay = parseInt(RECONNECT_DELAY, 10) || 5000;
+        const delay = Math.min(baseDelay * Math.pow(2, attempts), 300000);
+        log(`🔄 [${label}] Перепідключення через ${Math.round(delay / 1000)}с (спроба ${attempts + 1}/${maxAttempts})`);
+        setTimeout(() => { reco = false; startIMAPForAccount(account); }, delay);
     }
 
     log(`🔌 [${label}] Підключення...`);

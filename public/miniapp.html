@@ -398,6 +398,14 @@
 
         const BASE = window.location.origin;
 
+        function esc(s) {
+            if (s == null || s === undefined) return '';
+            const t = String(s);
+            const div = document.createElement('div');
+            div.textContent = t;
+            return div.innerHTML;
+        }
+
         function showPanel(name) {
             document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -421,23 +429,23 @@
         function renderOverview(stats, analytics) {
             document.getElementById('email-label').textContent = stats.email || '';
             document.getElementById('stats-cards').innerHTML = `
-        <div class="stat-card"><div class="stat-value">${stats.today || 0}</div><div class="stat-label">📅 Сьогодні</div></div>
-        <div class="stat-card"><div class="stat-value">${stats.week || 0}</div><div class="stat-label">📆 Тиждень</div></div>
-        <div class="stat-card"><div class="stat-value">${stats.total || 0}</div><div class="stat-label">📈 Всього</div></div>
-        <div class="stat-card"><div class="stat-value">${stats.accounts || 1}</div><div class="stat-label">📧 Акаунтів</div></div>`;
+        <div class="stat-card"><div class="stat-value">${Number(stats.today) || 0}</div><div class="stat-label">📅 Сьогодні</div></div>
+        <div class="stat-card"><div class="stat-value">${Number(stats.week) || 0}</div><div class="stat-label">📆 Тиждень</div></div>
+        <div class="stat-card"><div class="stat-value">${Number(stats.total) || 0}</div><div class="stat-label">📈 Всього</div></div>
+        <div class="stat-card"><div class="stat-value">${Number(stats.accounts) || 1}</div><div class="stat-label">📧 Акаунтів</div></div>`;
 
             const trend = analytics.trend || [];
             const max = Math.max(...trend.map(t => t.count), 1);
             document.getElementById('trend-chart').innerHTML = trend.map(t => `
         <div class="chart-col">
-          <div class="chart-val">${t.count}</div>
+          <div class="chart-val">${Number(t.count)}</div>
           <div class="chart-bar" style="height:${Math.max((t.count / max) * 90, 2)}px"></div>
-          <div class="chart-label">${t.date}</div>
+          <div class="chart-label">${esc(t.date)}</div>
         </div>`).join('');
 
             const senders = analytics.topSenders || [];
             document.getElementById('top-senders').innerHTML = senders.length > 0
-                ? senders.map(s => `<div class="list-item"><span class="list-email">${s.email}</span><span class="list-count">${s.count}</span></div>`).join('')
+                ? senders.map(s => `<div class="list-item"><span class="list-email">${esc(s.email)}</span><span class="list-count">${Number(s.count)}</span></div>`).join('')
                 : '<span style="color:var(--muted);font-size:13px">Ще немає даних</span>';
         }
 
@@ -447,7 +455,7 @@
             document.getElementById('hourly-heatmap').innerHTML = hourly.map((count, h) => {
                 const intensity = count / maxH;
                 const bg = intensity === 0 ? 'rgba(249,115,22,0.04)' : `rgba(249,115,22,${0.1 + intensity * 0.5})`;
-                return `<div class="heat-cell" style="background:${bg}" title="${h}:00 — ${count}">${h}</div>`;
+                return `<div class="heat-cell" style="background:${bg}" title="${h}:00 — ${Number(count)}">${h}</div>`;
             }).join('');
 
             const weekday = data.weekday || new Array(7).fill(0);
@@ -455,14 +463,14 @@
             const maxW = Math.max(...weekday, 1);
             document.getElementById('weekday-chart').innerHTML = weekday.map((count, i) => `
         <div class="weekday-item">
-          <div class="weekday-val">${count}</div>
+          <div class="weekday-val">${Number(count)}</div>
           <div class="weekday-bar-wrap"><div class="weekday-bar" style="height:${Math.max((count / maxW) * 70, 4)}px"></div></div>
           <div class="weekday-label">${dayNames[i]}</div>
         </div>`).join('');
 
             const cats = data.categories || [];
             document.getElementById('categories-breakdown').innerHTML = cats.length > 0
-                ? cats.map(c => `<div class="cat-row"><span class="cat-name">${c.name}</span><div class="cat-bar-bg"><div class="cat-bar-fill" style="width:${c.pct}%"></div></div><span class="cat-pct">${c.pct}%</span></div>`).join('')
+                ? cats.map(c => `<div class="cat-row"><span class="cat-name">${esc(c.name)}</span><div class="cat-bar-bg"><div class="cat-bar-fill" style="width:${Number(c.pct)}%"></div></div><span class="cat-pct">${Number(c.pct)}%</span></div>`).join('')
                 : '<span style="color:var(--muted);font-size:13px">Ще немає даних</span>';
         }
 
@@ -471,15 +479,15 @@
             document.getElementById('spam-words-count').textContent = (data.words || []).length;
             const senders = data.senders || [];
             document.getElementById('blocked-senders').innerHTML = senders.length > 0
-                ? senders.map(s => `<div class="list-item"><span class="list-email">${s}</span></div>`).join('')
+                ? senders.map(s => `<div class="list-item"><span class="list-email">${esc(s)}</span></div>`).join('')
                 : '<span style="color:var(--muted);font-size:13px">Немає</span>';
             const words = data.words || [];
             document.getElementById('spam-words-list').innerHTML = words.length > 0
-                ? words.map(w => `<span class="spam-word">${w}</span>`).join('')
+                ? words.map(w => `<span class="spam-word">${esc(w)}</span>`).join('')
                 : '<span style="color:var(--muted);font-size:13px">Додайте через /spam add</span>';
             const recent = data.recent || [];
             document.getElementById('recent-spam').innerHTML = recent.length > 0
-                ? recent.slice(0, 5).map(r => `<div class="list-item"><div><div style="font-size:13px;font-weight:500">${r.subject || '?'}</div><div class="list-email">${r.from || '?'}</div></div></div>`).join('')
+                ? recent.slice(0, 5).map(r => `<div class="list-item"><div><div style="font-size:13px;font-weight:500">${esc(r.subject)}</div><div class="list-email">${esc(r.from)}</div></div></div>`).join('')
                 : '<span style="color:var(--muted);font-size:13px">Немає</span>';
         }
 

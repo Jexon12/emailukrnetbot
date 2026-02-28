@@ -1,0 +1,23 @@
+{
+  "muted": false,
+  "muteQueue": [],
+  "filters": [],
+  "accounts": [],
+  "stats": {
+    "daily": {
+      "2026-02-28": {
+        "count": 2,
+        "senders": {
+          "a@b.com": 2
+        },
+        "subjects": [
+          "Subject 1",
+          "Subject 2"
+        ]
+      }
+    },
+    "totalForwarded": 2
+  },
+  "spamWords": [],
+  "spamSenders": []
+}

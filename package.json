@@ -1,10 +1,11 @@
 {
     "name": "email-telegram-bot",
-    "version": "3.0.0",
+    "version": "4.0.0",
     "description": "Full-featured Telegram bot: UKR.NET email forwarding, commands, web panel",
     "main": "bot.js",
     "scripts": {
-        "start": "node bot.js"
+        "start": "node bot.js",
+        "test": "node tests/spam.test.js && node tests/filters.test.js && node tests/stats.test.js"
     },
     "dependencies": {
         "dotenv": "^16.4.7",
