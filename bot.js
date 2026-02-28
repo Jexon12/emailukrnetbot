@@ -830,6 +830,21 @@ async function main() {
     }
 
     log(`🚀 Запущено ${1 + extraAccounts.length} IMAP з'єднань`);
+
+    // ─── Keep-alive: self-ping every 14 min to prevent Render from sleeping ───
+    const KEEP_ALIVE_INTERVAL = 14 * 60 * 1000; // 14 minutes
+    const renderUrl = process.env.RENDER_EXTERNAL_URL;
+    if (renderUrl) {
+        setInterval(() => {
+            fetch(`${renderUrl}/api/health`)
+                .then(res => res.json())
+                .then(data => log(`🏓 Keep-alive ping OK (uptime: ${Math.floor(data.uptime / 60)}хв)`))
+                .catch(err => log(`⚠️ Keep-alive ping failed: ${err.message}`));
+        }, KEEP_ALIVE_INTERVAL);
+        log(`🏓 Keep-alive увімкнено (кожні 14 хв → ${renderUrl})`);
+    } else {
+        log(`⚠️ RENDER_EXTERNAL_URL не встановлено — keep-alive вимкнено`);
+    }
 }
 
 main();
