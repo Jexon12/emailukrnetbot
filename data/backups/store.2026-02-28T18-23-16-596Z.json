@@ -1,0 +1,27 @@
+{
+  "muted": false,
+  "muteQueue": [],
+  "filters": [],
+  "accounts": [],
+  "stats": {
+    "daily": {
+      "2026-02-28": {
+        "count": 4,
+        "senders": {
+          "a@b.com": 2,
+          "c@d.com": 1,
+          "2jexon2@gmail.com": 1
+        },
+        "subjects": [
+          "Subject 1",
+          "Subject 2",
+          "Subject 3",
+          "zxccccccccccccccc"
+        ]
+      }
+    },
+    "totalForwarded": 4
+  },
+  "spamWords": [],
+  "spamSenders": []
+}
