@@ -20,19 +20,16 @@
         ]
       },
       "2026-03-05": {
-        "count": 3,
+        "count": 1,
         "senders": {
-          "bestdeal@rozetka.com.ua": 2,
-          "info@mcnd.org.ua": 1
+          "bestdeal@rozetka.com.ua": 1
         },
         "subjects": [
-          "Рекомендація розпродажу для вас! Знижка 500₴ на Мобільний телефон Xiaomi Redmi Note 14 6/128GB Midnight Black (1123257)",
-          "Рекомендація розпродажу для вас! Знижка 500₴ на Мобільний телефон Xiaomi Redmi Note 14 6/128GB Midnight Black (1123257)",
-          "🇺🇦 Конференція у м. Львів з публікацією | 📅 Прийом до 9 березня | 💵 Оргвнесок 200 грн"
+          "Рекомендація розпродажу для вас! Знижка 500₴ на Мобільний телефон Xiaomi Redmi Note 14 6/128GB Midnight Black (1123257)"
         ]
       }
     },
-    "totalForwarded": 7
+    "totalForwarded": 5
   },
   "spamWords": [],
   "spamSenders": [],
@@ -56,7 +53,7 @@
       0,
       0,
       0,
-      3,
+      1,
       0,
       1,
       0,
@@ -68,25 +65,20 @@
       0,
       0,
       0,
-      3,
+      1,
       0,
       1
     ],
     "categories": {
       "Інше": 1,
-      "Покупки": 2,
-      "Банк/Фінанси": 1
+      "Покупки": 1
     },
     "senderHistory": {
       "2jexon2@gmail.com": [
         "2026-02-28T18:22:58.000Z"
       ],
       "bestdeal@rozetka.com.ua": [
-        "2026-03-05T16:03:52.000Z",
         "2026-03-05T16:03:52.000Z"
-      ],
-      "info@mcnd.org.ua": [
-        "2026-03-05T16:37:14.000Z"
       ]
     },
     "timeline": [
@@ -103,22 +95,6 @@
         "subject": "Рекомендація розпродажу для вас! Знижка 500₴ на Мобільний телефон Xiaomi Redmi Note 14 6/128GB Midnight Black (1123257)",
         "category": "Покупки",
         "date": "2026-03-05T16:03:52.000Z",
-        "hour": 18,
-        "day": 4
-      },
-      {
-        "from": "bestdeal@rozetka.com.ua",
-        "subject": "Рекомендація розпродажу для вас! Знижка 500₴ на Мобільний телефон Xiaomi Redmi Note 14 6/128GB Midnight Black (1123257)",
-        "category": "Покупки",
-        "date": "2026-03-05T16:03:52.000Z",
-        "hour": 18,
-        "day": 4
-      },
-      {
-        "from": "info@mcnd.org.ua",
-        "subject": "🇺🇦 Конференція у м. Львів з публікацією | 📅 Прийом до 9 березня | 💵 Оргвнесок 200 грн",
-        "category": "Банк/Фінанси",
-        "date": "2026-03-05T16:37:14.000Z",
         "hour": 18,
         "day": 4
       }

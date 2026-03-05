@@ -1,4 +1,5 @@
 require('dotenv').config();
+require('./lib/patch-utf7')(); // 🛠️ Fix for utf7 Node.js > 14 Buffer deprecation
 const TelegramBot = require('node-telegram-bot-api');
 
 const store = require('./lib/store');
@@ -288,5 +289,5 @@ main();
 // ─── Graceful shutdown ──────────────────────────────────────────
 process.on('SIGINT', () => { store.flush(); logger.info('👋 Вихід'); process.exit(0); });
 process.on('SIGTERM', () => { store.flush(); logger.info('👋 Вихід'); process.exit(0); });
-process.on('uncaughtException', (err) => logger.error(`❌ Exception: ${err.message}`));
-process.on('unhandledRejection', (err) => logger.error(`❌ Rejection: ${err.message}`));
+process.on('uncaughtException', (err) => logger.error(`❌ Exception:\n${err.stack || err.message}`));
+process.on('unhandledRejection', (err) => logger.error(`❌ Rejection:\n${err.stack || err.message}`));
