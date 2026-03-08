@@ -173,7 +173,7 @@ registerCallbacks(bot, config);
 setInterval(async () => {
     const hour = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Kyiv' })).getHours();
     const min = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Kyiv' })).getMinutes();
-    if (hour === 7 && min === 0 && store.isMuted()) {
+    if (hour === 7 && min < 2 && store.isMuted()) {
         const queue = store.flushMuteQueue();
         if (queue.length > 0) {
             const summary = queue.map((e, i) =>
