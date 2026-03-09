@@ -141,11 +141,12 @@ async function sendToTelegram(parsed, accountLabel) {
         if (err.message.includes('can\'t parse entities') || err.message.includes('Bad Request')) {
             logger.warn(`⚠️ Telegram HTML error, falling back to plain text for "${subject}"`);
             const plainMessage = [
-                header.replace(/<[^>]+>/g, ''),
+                `📧 ${subject}`,
+                `від: ${fromEmail}`,
                 '',
-                body.replace(/<[^>]+>/g, '').substring(0, 3000),
-                attachLine.replace(/<[^>]+>/g, '')
-            ].join('\n');
+                body.substring(0, 3000),
+                parsed.attachments?.length > 0 ? `📎 Вкладень: ${parsed.attachments.length}` : ''
+            ].filter(Boolean).join('\n');
             sent = await bot.sendMessage(chatId, plainMessage);
         } else {
             throw err;
