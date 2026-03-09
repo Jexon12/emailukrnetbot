@@ -134,7 +134,23 @@ async function sendToTelegram(parsed, accountLabel) {
         parse_mode: 'HTML',
     };
 
-    const sent = await bot.sendMessage(chatId, message, keyboard);
+    let sent;
+    try {
+        sent = await bot.sendMessage(chatId, message, keyboard);
+    } catch (err) {
+        if (err.message.includes('can\'t parse entities') || err.message.includes('Bad Request')) {
+            logger.warn(`⚠️ Telegram HTML error, falling back to plain text for "${subject}"`);
+            const plainMessage = [
+                header.replace(/<[^>]+>/g, ''),
+                '',
+                body.replace(/<[^>]+>/g, '').substring(0, 3000),
+                attachLine.replace(/<[^>]+>/g, '')
+            ].join('\n');
+            sent = await bot.sendMessage(chatId, plainMessage);
+        } else {
+            throw err;
+        }
+    }
 
     // Store reply info
     const account = accountLabel
