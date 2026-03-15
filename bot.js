@@ -102,7 +102,7 @@ async function sendToTelegram(parsed, accountLabel) {
             reply_markup: {
                 inline_keyboard: [[
                     { text: '✅ Не спам', callback_data: `notspam_${Date.now()}` },
-                    { text: '🚫 Блокувати відправника', callback_data: `blocksender_${fromEmail}` },
+                    { text: '🚫 Блокувати відправника', callback_data: `blocksender_${Buffer.from(fromEmail).toString('base64')}` },
                 ]],
             },
         });
@@ -128,7 +128,7 @@ async function sendToTelegram(parsed, accountLabel) {
         reply_markup: {
             inline_keyboard: [[
                 { text: '✉️ Відповісти', callback_data: cbReply },
-                { text: '🛡️ Спам', callback_data: `markspam_${fromEmail}_${Date.now()}` },
+                { text: '🛡️ Спам', callback_data: `markspam_${Buffer.from(fromEmail).toString('base64')}_${Date.now()}` },
             ]],
         },
         parse_mode: 'HTML',
@@ -153,12 +153,9 @@ async function sendToTelegram(parsed, accountLabel) {
         }
     }
 
-    // Store reply info
-    const account = accountLabel
-        ? store.getAccounts().find(a => a.user === accountLabel) || { user: EMAIL_USER, password: EMAIL_PASSWORD }
-        : { user: EMAIL_USER, password: EMAIL_PASSWORD };
-
-    pendingReplies.set(cbReply, { to: fromEmail, subject, account, createdAt: Date.now() });
+    // Store reply info (only email, lookup account when sending reply for security)
+    const replyEmail = accountLabel || EMAIL_USER;
+    pendingReplies.set(cbReply, { to: fromEmail, subject, replyEmail, createdAt: Date.now() });
     prunePendingReplies();
 
     logger.info(`✅ "${subject}" від ${fromEmail}`);
